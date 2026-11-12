@@ -33,6 +33,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# runtime database stores
+data/*.wal.jsonl
+data/*.tmp
+
 # vercel
 .vercel
 
