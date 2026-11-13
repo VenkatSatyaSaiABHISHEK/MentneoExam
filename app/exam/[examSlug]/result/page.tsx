@@ -63,43 +63,60 @@ function StudentResultContent() {
           return;
         }
 
+        // Check local storage for direct submission result
+        let directResult: any = null;
+        if (typeof window !== 'undefined') {
+          try {
+            const storedRes = localStorage.getItem(`mentneo_result_${attemptId}`);
+            if (storedRes) directResult = JSON.parse(storedRes);
+          } catch {}
+        }
+
         // Fetch live results for the exam
         if (found) {
           const resultsRes = await fetch(`/api/examinations/${found.id}/results`);
           const resultsJson = await resultsRes.json();
-          if (resultsJson.success && resultsJson.data?.rows) {
-            const myRow = resultsJson.data.rows.find((r: any) => r.attemptId === attemptId);
-            if (myRow) {
-              setResult({
-                id: `res-${attemptId}`,
-                attempt_id: attemptId,
-                registration_id: '',
-                round_id: '',
-                correct_count: Math.round(myRow.score / (myRow.totalMarks > 0 ? myRow.totalMarks / 5 : 1)),
-                wrong_count: 0,
-                unanswered_count: 0,
-                score: myRow.score || 0,
-                total_marks: myRow.totalMarks,
-                qualifying_marks: myRow.qualifyingMarks || 4,
-                is_qualified: Boolean(myRow.isQualified),
-                evaluated_at: myRow.submittedAt || new Date().toISOString(),
-              });
+          const myRow = resultsJson.success && resultsJson.data?.rows
+            ? resultsJson.data.rows.find((r: any) => r.attemptId === attemptId)
+            : null;
 
-              setQualification({
-                id: `qual-${attemptId}`,
-                registration_id: '',
-                round_id: '',
-                qualified: Boolean(myRow.isQualified),
-                next_round_number: myRow.isQualified ? myRow.roundNumber + 1 : null,
-                qualified_at: new Date().toISOString(),
-              });
+          const activeResult = myRow || directResult;
+          if (activeResult) {
+            const scoreVal = activeResult.score ?? 0;
+            const totalVal = activeResult.totalMarks || activeResult.total_marks || 30;
+            const qualVal = activeResult.qualifyingMarks || activeResult.qualifying_marks || 10;
+            const isQual = Boolean(activeResult.isQualified ?? activeResult.is_qualified ?? (scoreVal >= qualVal));
+            const roundNum = activeResult.roundNumber || 1;
 
-              const r = (found.rounds || []).find((rnd: any) => rnd.round_number === myRow.roundNumber);
-              if (r) {
-                setCurrentRound(r);
-                if (r.next_round_delay_seconds) {
-                  setCountdownSeconds(r.next_round_delay_seconds);
-                }
+            setResult({
+              id: `res-${attemptId}`,
+              attempt_id: attemptId,
+              registration_id: activeResult.registration_id || '',
+              round_id: activeResult.round_id || '',
+              correct_count: activeResult.correct_count ?? Math.round(scoreVal),
+              wrong_count: activeResult.wrong_count ?? 0,
+              unanswered_count: activeResult.unanswered_count ?? 0,
+              score: scoreVal,
+              total_marks: totalVal,
+              qualifying_marks: qualVal,
+              is_qualified: isQual,
+              evaluated_at: activeResult.evaluated_at || activeResult.submittedAt || new Date().toISOString(),
+            });
+
+            setQualification({
+              id: `qual-${attemptId}`,
+              registration_id: activeResult.registration_id || '',
+              round_id: activeResult.round_id || '',
+              qualified: isQual,
+              next_round_number: isQual ? roundNum + 1 : null,
+              qualified_at: new Date().toISOString(),
+            });
+
+            const r = (found.rounds || []).find((rnd: any) => rnd.round_number === roundNum);
+            if (r) {
+              setCurrentRound(r);
+              if (r.next_round_delay_seconds) {
+                setCountdownSeconds(r.next_round_delay_seconds);
               }
             }
           }

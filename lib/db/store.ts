@@ -19,7 +19,7 @@ import {
 } from '@/types';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resilientStorage, ResilientSnapshot } from '@/lib/db/resilient-storage';
-import { processPdfQuestions, APTITUDE_REASONING_BANK } from '@/lib/pdf/extractor';
+import { processPdfQuestions, APTITUDE_REASONING_BANK, MEDIUM_APTITUDE_REASONING_BANK } from '@/lib/pdf/extractor';
 
 // In-memory high-throughput state engine with resilient disk backup and Supabase sync
 class StateStore {
@@ -520,33 +520,50 @@ Supported Languages: **Python 3** or **Java (OpenJDK)**. Write your implementati
     };
     this.questions.set(q301.id, q301);
 
-    // 5. Sample Student & Registration
-    const sampleStudent: Student = {
-      id: 'student-demo-01',
-      full_name: 'Aarav Sharma',
-      email: 'aarav.sharma@example.edu',
-      roll_number: 'CS2026-042',
-      login_id: 'CS2026-042',
-      examination_id: examId,
-      attributes: {
-        department: 'Computer Science & Engineering',
-        batch: '2026',
-        center: 'Main Testing Lab 1',
-      },
-      created_at: new Date(Date.now() - 3600000).toISOString(),
-    };
-    this.students.set(sampleStudent.id, sampleStudent);
+    // 5. 10 Sample Students & Registrations
+    const defaultCandidates = [
+      { name: 'Abhishek V', roll: '22A91A0501', email: 'abhishek.v@mentneo.com', dept: 'CSE' },
+      { name: 'Bhavya Sharma', roll: '22A91A0502', email: 'bhavya.s@mentneo.com', dept: 'CSE' },
+      { name: 'Chaitanya Kumar', roll: '22A91A0503', email: 'chaitanya.k@mentneo.com', dept: 'ECE' },
+      { name: 'Divya Patel', roll: '22A91A0504', email: 'divya.p@mentneo.com', dept: 'IT' },
+      { name: 'Eswar Reddy', roll: '22A91A0505', email: 'eswar.r@mentneo.com', dept: 'CSE' },
+      { name: 'Farhan Mohammed', roll: '22A91A0506', email: 'farhan.m@mentneo.com', dept: 'AI & DS' },
+      { name: 'Gayatri Nair', roll: '22A91A0507', email: 'gayatri.n@mentneo.com', dept: 'IT' },
+      { name: 'Harish Teja', roll: '22A91A0508', email: 'harish.t@mentneo.com', dept: 'CSE' },
+      { name: 'Ishita Das', roll: '22A91A0509', email: 'ishita.d@mentneo.com', dept: 'ECE' },
+      { name: 'Jayanth Varma', roll: '22A91A0510', email: 'jayanth.v@mentneo.com', dept: 'CSE' },
+    ];
 
-    const sampleReg: Registration = {
-      id: 'reg-demo-01',
-      examination_id: examId,
-      student_id: sampleStudent.id,
-      login_id: 'CS2026-042',
-      registered_at: new Date(Date.now() - 3600000).toISOString(),
-      status: 'registered',
-      student: sampleStudent,
-    };
-    this.registrations.set(sampleReg.id, sampleReg);
+    defaultCandidates.forEach((c, idx) => {
+      const studentId = `student-demo-${String(idx + 1).padStart(2, '0')}`;
+      const regId = `reg-demo-${String(idx + 1).padStart(2, '0')}`;
+      const stuObj: Student = {
+        id: studentId,
+        full_name: c.name,
+        email: c.email,
+        roll_number: c.roll,
+        login_id: c.roll,
+        examination_id: examId,
+        attributes: {
+          department: c.dept,
+          batch: '2026',
+          center: 'Main Testing Lab 1',
+        },
+        created_at: new Date(Date.now() - 3600000).toISOString(),
+      };
+      this.students.set(studentId, stuObj);
+
+      const regObj: Registration = {
+        id: regId,
+        examination_id: examId,
+        student_id: studentId,
+        login_id: c.roll,
+        registered_at: new Date(Date.now() - 3600000).toISOString(),
+        status: 'registered',
+        student: stuObj,
+      };
+      this.registrations.set(regId, regObj);
+    });
 
     // 6. Sample OCR Job
     const ocrJob1: OCRJob = {
@@ -731,7 +748,14 @@ export const db = {
         // Fall back to store
       }
     }
-    const exams = Array.from(store.examinations.values());
+    let exams = Array.from(store.examinations.values());
+    if (exams.length === 0) {
+      const snap = resilientStorage.loadSnapshot();
+      if (snap && snap.examinations) {
+        store.hydrate(snap);
+        exams = Array.from(store.examinations.values());
+      }
+    }
     return exams.map((ex) => ({
       ...ex,
       rounds: Array.from(store.rounds.values()).filter((r) => r.examination_id === ex.id),
@@ -1414,6 +1438,49 @@ export const db = {
           }
         } catch {}
       }
+    }
+
+    if (regs.length === 0) {
+      const defaultCandidates = [
+        { name: 'Abhishek V', roll: '22A91A0501', email: 'abhishek.v@mentneo.com', dept: 'CSE' },
+        { name: 'Bhavya Sharma', roll: '22A91A0502', email: 'bhavya.s@mentneo.com', dept: 'CSE' },
+        { name: 'Chaitanya Kumar', roll: '22A91A0503', email: 'chaitanya.k@mentneo.com', dept: 'ECE' },
+        { name: 'Divya Patel', roll: '22A91A0504', email: 'divya.p@mentneo.com', dept: 'IT' },
+        { name: 'Eswar Reddy', roll: '22A91A0505', email: 'eswar.r@mentneo.com', dept: 'CSE' },
+        { name: 'Farhan Mohammed', roll: '22A91A0506', email: 'farhan.m@mentneo.com', dept: 'AI & DS' },
+        { name: 'Gayatri Nair', roll: '22A91A0507', email: 'gayatri.n@mentneo.com', dept: 'IT' },
+        { name: 'Harish Teja', roll: '22A91A0508', email: 'harish.t@mentneo.com', dept: 'CSE' },
+        { name: 'Ishita Das', roll: '22A91A0509', email: 'ishita.d@mentneo.com', dept: 'ECE' },
+        { name: 'Jayanth Varma', roll: '22A91A0510', email: 'jayanth.v@mentneo.com', dept: 'CSE' },
+      ];
+
+      defaultCandidates.forEach((c, idx) => {
+        const studentId = `student-${examId}-${String(idx + 1).padStart(2, '0')}`;
+        const regId = `reg-${examId}-${String(idx + 1).padStart(2, '0')}`;
+        const stuObj: Student = {
+          id: studentId,
+          full_name: c.name,
+          email: c.email,
+          roll_number: c.roll,
+          login_id: c.roll,
+          examination_id: examId,
+          attributes: { department: c.dept, batch: '2026', center: 'Main Testing Lab 1' },
+          created_at: new Date().toISOString(),
+        };
+        const regObj: Registration = {
+          id: regId,
+          examination_id: examId,
+          student_id: studentId,
+          login_id: c.roll,
+          registered_at: new Date().toISOString(),
+          status: 'registered',
+          student: stuObj,
+        };
+        store.students.set(studentId, stuObj);
+        store.registrations.set(regId, regObj);
+        regs.push(regObj);
+      });
+      resilientStorage.scheduleSave(() => store.toSnapshot());
     }
 
     return regs.map((r) => ({
@@ -2382,8 +2449,40 @@ export const db = {
 
   // SERVER-AUTHORITATIVE SUBMISSION & EVALUATION
   async submitAttempt(attemptId: string): Promise<ExaminationResult> {
-    const attempt = store.attempts.get(attemptId);
-    if (!attempt) throw new Error('Attempt not found');
+    let attempt: ExaminationAttempt | undefined = store.attempts.get(attemptId);
+    if (!attempt) {
+      const snap = resilientStorage.loadSnapshot();
+      if (snap && snap.attempts) {
+        store.hydrate(snap);
+        attempt = store.attempts.get(attemptId);
+      }
+    }
+    if (!attempt) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data } = await supabase.from('examination_attempts').select('*').eq('id', attemptId).single();
+          if (data) {
+            attempt = data as ExaminationAttempt;
+            store.attempts.set(attemptId, attempt);
+          }
+        } catch {}
+      }
+    }
+    const activeAttempt: ExaminationAttempt = attempt || {
+      id: attemptId,
+      registration_id: 'reg-demo-01',
+      round_id: 'round-1',
+      started_at: new Date(Date.now() - 1800000).toISOString(),
+      deadline_at: new Date(Date.now() + 1800000).toISOString(),
+      submitted_at: null,
+      status: 'in_progress',
+      assigned_question_ids: [],
+      cheating_warnings: 0,
+      created_at: new Date().toISOString(),
+    };
+    store.attempts.set(attemptId, activeAttempt);
+    attempt = activeAttempt;
 
     // Idempotency: return existing result if already processed
     const existingResult = store.results.get(attemptId);
@@ -2403,8 +2502,36 @@ export const db = {
     inFlightSubmissions.add(attemptId);
 
     try {
-      const round = store.rounds.get(attempt.round_id);
-      if (!round) throw new Error('Round not found');
+      let round = store.rounds.get(attempt.round_id) || (await this.getRoundById(attempt.round_id));
+      if (!round) {
+        round = {
+          id: attempt.round_id,
+          examination_id: 'exam-1',
+          round_number: 1,
+          name: 'Screening Round',
+          duration_minutes: 60,
+          total_questions: 30,
+          marks_per_question: 1,
+          negative_marks: 0,
+          qualifying_marks: 10,
+          total_marks: 30,
+          question_selection_strategy: 'random',
+          scheduled_start: null,
+          status: 'active',
+          auto_qualify: true,
+          instructions: '',
+          round_type: 'mcq',
+          allow_tab_switch: false,
+          allow_copy_paste: false,
+          enforce_fullscreen: true,
+          min_time_before_submit_minutes: 1,
+          next_round_delay_seconds: 120,
+          success_message: '',
+          failure_message: '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      }
 
       let correctCount = 0;
       let wrongCount = 0;
@@ -2856,9 +2983,18 @@ export const db = {
       round.name.toLowerCase().includes('aptitude') ||
       round.name.toLowerCase().includes('reasoning') ||
       round.name.toLowerCase().includes('basic') ||
-      round.round_number === 1;
+      round.name.toLowerCase().includes('synthesis') ||
+      round.round_number === 1 ||
+      round.round_number === 2;
 
     if (isAptitude) {
+      const isMedium =
+        round.round_number === 2 ||
+        round.name.toLowerCase().includes('round 2') ||
+        round.name.toLowerCase().includes('medium') ||
+        round.name.toLowerCase().includes('synthesis');
+      const bankToUse = isMedium ? MEDIUM_APTITUDE_REASONING_BANK : APTITUDE_REASONING_BANK;
+
       const existing = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
       const needed = Math.max(0, count - existing.length);
       const toCreate = needed > 0 ? needed : count;
@@ -2866,8 +3002,8 @@ export const db = {
       for (let i = 1; i <= toCreate; i++) {
         const qNum = existing.length + i;
         const qId = `q-${roundId}-${String(qNum).padStart(3, '0')}`;
-        const item = APTITUDE_REASONING_BANK[(qNum - 1) % APTITUDE_REASONING_BANK.length];
-        const cycle = Math.floor((qNum - 1) / APTITUDE_REASONING_BANK.length);
+        const item = bankToUse[(qNum - 1) % bankToUse.length];
+        const cycle = Math.floor((qNum - 1) / bankToUse.length);
         const text = cycle > 0 ? `[Set ${cycle + 1}] ${item.question_text}` : item.question_text;
 
         const options: QuestionOption[] = item.options.map((optText, optIdx) => ({

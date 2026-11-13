@@ -252,6 +252,114 @@ export const APTITUDE_REASONING_BANK: ParsedQuestionItem[] = [
 ];
 
 /**
+ * 100 Medium-Level Aptitude & Logical Reasoning questions.
+ * Extracted from D:\100 Medium-Level Aptitude and Reasoning Questions with Answer Key.pdf.
+ * Used for Round 2: High Aptitude and Reasoning question bank.
+ */
+export const MEDIUM_APTITUDE_REASONING_BANK: ParsedQuestionItem[] = [
+  { question_text: "3, 7, 15, 31, 63, ?", options: ["119", "125", "127", "131"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "2, 5, 10, 17, 26, ?", options: ["35", "36", "37", "38"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "4, 6, 9, 13.5, ?", options: ["18", "19.5", "20.25", "21"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "1, 3, 7, 13, 21, ?", options: ["29", "31", "33", "35"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "7, 10, 16, 28, 52, ?", options: ["88", "96", "100", "104"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "6, 11, 21, 36, 56, ?", options: ["76", "81", "86", "91"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "1, 2, 6, 15, 31, ?", options: ["52", "56", "60", "62"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "AZ, BY, CX, DW, ?", options: ["EV", "EU", "FV", "FU"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "A shopkeeper marks an article 25% above cost price and allows a 10% discount. His profit percentage is:", options: ["10%", "12.5%", "15%", "17.5%"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A price is increased by 20% and then decreased by 20%. The net change is:", options: ["No change", "4% decrease", "4% increase", "2% decrease"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A town's population is 20,000 and grows 10% every year. What is it after 2 years?", options: ["24,000", "24,200", "24,400", "22,000"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "An article sold at a 20% loss would have given a 10% profit if sold for \u20b9 120 more. What is its cost price?", options: ["\u20b9 300", "\u20b9 400", "\u20b9 450", "\u20b9 500"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "In an exam, 60% of the students passed and 200 failed. How many students appeared?", options: ["400", "450", "500", "600"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "The sum of two numbers is 50. If 60% of the first equals 40% of the second, the larger number is:", options: ["20", "25", "30", "32"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "Two articles are each sold for \u20b9 1,200, one at a 20% profit and the other at a 20% loss. The overall result is:", options: ["No loss", "2% loss", "4% loss", "4% profit"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "The cost price of 12 articles equals the selling price of 10 articles. The profit percentage is:", options: ["10%", "15%", "20%", "25%"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "Two successive discounts of 20% and 10% are equal to a single discount of:", options: ["30%", "28%", "25%", "27%"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A's salary is 25% more than B's. B's salary is what percent less than A's?", options: ["20%", "25%", "15%", "30%"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "If A : B = 2 : 3 and B : C = 4 : 5, then A : B : C is:", options: ["8 : 12 : 15", "2 : 3 : 5", "6 : 9 : 10", "8 : 10 : 15"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "\u20b9 780 is divided among A, B and C in the ratio 2 : 3 : 7. C's share is:", options: ["\u20b9 390", "\u20b9 455", "\u20b9 420", "\u20b9 325"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The average of 5 numbers is 40. When one number is removed, the average of the remaining four becomes 35. The removed number is:", options: ["50", "55", "60", "65"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "The average age of 3 people is 24. A fourth person joins and the average becomes 26. The fourth person's age is:", options: ["30", "32", "34", "36"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A father is 4 times as old as his son. After 6 years he will be 3 times as old. The son's present age is:", options: ["10", "12", "14", "15"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The ages of A and B are in the ratio 3 : 5 and their sum is 48. B's age after 4 years will be:", options: ["30", "32", "34", "36"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "The mean of 11 numbers is 30. The mean of the first six is 28 and of the last six is 33. The sixth number is:", options: ["34", "36", "38", "40"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "If 2A = 3B = 4C, then A : B : C is:", options: ["6 : 4 : 3", "2 : 3 : 4", "4 : 3 : 2", "3 : 4 : 6"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "Two numbers are in the ratio 5 : 7. If 6 is added to each, the ratio becomes 3 : 4. The larger number is:", options: ["35", "42", "49", "56"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The sum of the ages of a mother and her daughter is 56. Four years ago the mother was 3 times as old as the daughter. The mother's present age is:", options: ["36", "40", "42", "44"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A person goes from A to B at 40 km/h and returns at 60 km/h. His average speed is:", options: ["48 km/h", "50 km/h", "52 km/h", "45 km/h"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "A 150 m long train passes a pole in 10 seconds. Its speed is:", options: ["45 km/h", "54 km/h", "60 km/h", "72 km/h"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A 200 m train running at 72 km/h crosses a 300 m platform in:", options: ["20 s", "25 s", "30 s", "35 s"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Two 100 m trains move in opposite directions at 60 km/h and 40 km/h. They cross each other in:", options: ["6 s", "7.2 s", "8 s", "9 s"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A boat's speed in still water is 12 km/h and the stream flows at 3 km/h. Time to travel 45 km downstream:", options: ["3 h", "3.75 h", "4 h", "5 h"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "A can finish a job in 12 days and B in 18 days. Working together they finish it in:", options: ["6 days", "7.2 days", "8 days", "7.5 days"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A and B together finish a job in 10 days. A alone takes 15 days. B alone takes:", options: ["20 days", "25 days", "30 days", "35 days"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "8 men complete a job in 15 days. How many men are needed to finish it in 10 days?", options: ["10", "12", "14", "16"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Pipe A fills a tank in 20 minutes and pipe B in 30 minutes. Both are opened together, but A is closed after 6 minutes. The tank fills in a total of:", options: ["15 min", "18 min", "21 min", "24 min"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "A man walking at 5 km/h reaches his office 10 minutes late. Walking at 6 km/h he reaches 10 minutes early. The distance to his office is:", options: ["8 km", "10 km", "12 km", "15 km"], correct_answer: "D", difficulty: "medium" },
+  { question_text: "The simple interest on a sum for 3 years at 8% per year is \u20b9 960. The sum is:", options: ["\u20b9 3,500", "\u20b9 4,000", "\u20b9 4,500", "\u20b9 5,000"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The compound interest on \u20b9 10,000 at 10% per year for 2 years is:", options: ["\u20b9 2,000", "\u20b9 2,050", "\u20b9 2,100", "\u20b9 2,200"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "The difference between compound and simple interest on \u20b9 5,000 at 10% for 2 years is:", options: ["\u20b9 25", "\u20b9 50", "\u20b9 75", "\u20b9 100"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A sum doubles itself in 5 years at simple interest. The rate per year is:", options: ["10%", "15%", "20%", "25%"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "A 40 L mixture has milk and water in the ratio 3 : 1. How much water must be added to make the ratio 3 : 2?", options: ["5 L", "8 L", "10 L", "12 L"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "In what ratio must rice at \u20b9 40/kg be mixed with rice at \u20b9 60/kg to get a mixture worth \u20b9 48/kg? (cheaper : dearer)", options: ["2 : 3", "3 : 2", "1 : 1", "4 : 3"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A 20 L solution contains 25% alcohol. How much water must be added to make it 20% alcohol?", options: ["4 L", "5 L", "6 L", "8 L"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A sum becomes \u20b9 1,331 in 3 years at 10% compound interest. The principal is:", options: ["\u20b9 900", "\u20b9 1,000", "\u20b9 1,100", "\u20b9 1,200"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The HCF of 36, 48 and 60 is:", options: ["6", "12", "18", "24"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The LCM of 12, 15 and 20 is:", options: ["60", "90", "120", "180"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "The smallest number that leaves remainder 5 when divided by 8, 12 and 15 is:", options: ["120", "125", "115", "130"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The unit digit of 7^45 is:", options: ["1", "3", "7", "9"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "The remainder when 2^10 is divided by 7 is:", options: ["1", "2", "3", "4"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "How many prime numbers are there between 1 and 30?", options: ["9", "10", "11", "12"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "(0.2 \u00d7 0.5) \u00f7 0.04 = ?", options: ["0.25", "2.5", "25", "0.025"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "The sum of the first 20 natural numbers is:", options: ["190", "200", "210", "220"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "If DELHI is coded as EFMIJ, then MUMBAI is coded as:", options: ["NVMCBJ", "NVNCBJ", "NUNCBJ", "NVNCAJ"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "If BRAIN is coded as DTCKP, then SMART is coded as:", options: ["UNCTV", "UOCSV", "UOCTV", "TOCTV"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "If PAINT is coded as QZJMU, then TABLE is coded as:", options: ["UBCKF", "UZCMF", "UZCKF", "SZCKF"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "In a code, \"5 3 8\" means \"sweet red apple\", \"3 9 2\" means \"red juicy fruit\" and \"2 6 5\" means \"juicy sweet drink\". What is the code for \"red\"?", options: ["5", "3", "8", "9"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "If A = 2, B = 4, C = 6 and so on, the value of FACE is:", options: ["28", "30", "32", "34"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "If \u2295 means +, \u2296 means \u2212, \u2297 means \u00d7 and \u2298 means \u00f7, then 24 \u2298 6 \u2295 3 \u2297 2 \u2296 5 = ?", options: ["3", "5", "7", "9"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "If EAST is coded as FCVX (+1, +2, +3, +4), then WEST is coded as:", options: ["XFVX", "XGWX", "XGVX", "XHVX"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "In a mirror code (A \u2194 Z, B \u2194 Y, \u2026), LOVE is written as OLEV. How is CODE written?", options: ["XLVW", "WLXV", "XMWV", "XLWV"], correct_answer: "D", difficulty: "medium" },
+  { question_text: "Pointing to a man, Neha says, \"He is the son of my father's only brother's wife.\" How is the man related to Neha?", options: ["Brother", "Cousin", "Nephew", "Uncle"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A is B's sister. C is B's mother. D is C's father. How is A related to D?", options: ["Grandmother", "Granddaughter", "Daughter", "Grandfather"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "P \u00d7 Q means P is the mother of Q, and P \u00f7 Q means P is the sister of Q. In A \u00d7 B \u00f7 C, how is A related to C?", options: ["Mother", "Sister", "Aunt", "Grandmother"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "A man points to a woman and says, \"She is the wife of the only son of my mother.\" How is the woman related to the man?", options: ["Sister", "Wife", "Daughter", "Mother"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "P is the mother of Q. Q is the sister of R. R is the father of S. How is P related to S?", options: ["Mother", "Aunt", "Grandmother", "Sister"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "A family has 2 fathers and 2 sons. What is the minimum number of people in the family?", options: ["3", "4", "5", "6"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "A man walks 6 km north, turns right and walks 8 km, then turns right and walks 6 km. How far is he from the start?", options: ["6 km", "8 km", "10 km", "14 km"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Ria walks 5 m west from P, turns left and walks 3 m, then turns left and walks 5 m. How far and in which direction is she from P?", options: ["3 m south", "5 m south", "8 m west", "3 m north"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "Facing north-east, a person turns 90\u00b0 clockwise and then 135\u00b0 anticlockwise. Which direction is he facing?", options: ["North", "East", "West", "South"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "A man walks 20 m north, 10 m east, 30 m south and 10 m west. Where is he from the start?", options: ["10 m north", "10 m south", "20 m south", "40 m east"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Rahul faces west. He turns 90\u00b0 clockwise, then 180\u00b0 anticlockwise, then 90\u00b0 clockwise. Which direction is he facing?", options: ["North", "South", "East", "West"], correct_answer: "D", difficulty: "medium" },
+  { question_text: "Two friends start from the same point. One walks 12 km north and the other 5 km east. How far apart are they?", options: ["13 km", "15 km", "17 km", "7 km"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "In a row of 35 students, Raj is 10th from the left and Mohan is 12th from the right. How many students are between them?", options: ["12", "13", "14", "15"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Five people sit in a row facing north. A is at the left end, B is immediately to the right of A, C is at the right end, and D is immediately to the left of C. Who sits in the middle?", options: ["B", "D", "E", "A"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "Anita is 9th from the top in a class. Sunita is 5 ranks below Anita and 14th from the bottom. How many students are in the class?", options: ["26", "28", "29", "27"], correct_answer: "D", difficulty: "medium" },
+  { question_text: "A is older than B but younger than C. D is older than C but younger than E. Who is the third oldest?", options: ["A", "B", "C", "D"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "In a race, P finished 5 places ahead of Q. If Q finished 9th, P finished:", options: ["3rd", "5th", "4th", "14th"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "Four friends sit on a bench. B is immediately to the right of A, C is immediately to the left of D, and A does not sit at either end. Who sits at the extreme left?", options: ["A", "B", "C", "D"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "In a queue, Ravi is 12th from the front and Sita is 16th from the back. After they exchange places, Ravi is 20th from the front. How many people are in the queue?", options: ["34", "36", "37", "35"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "Five books sit on a shelf. English is at the extreme left, Chemistry is to the right of Biology and to the left of Maths, and Maths is to the left of Physics. Which book is in the middle?", options: ["Biology", "Chemistry", "Maths", "English For Q83\u201387, choose: (a) Only I follows (b) Only II follows (c) Both follow (d) Neither follows."], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Statements: All books are pens. Some pens are cups. No cup is a table. Conclusions: I. Some books are cups. II. Some pens are not tables.", options: ["Option A", "Option B", "Option C", "Option D"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "Statements: Some apples are oranges. All oranges are mangoes. Conclusions: I. Some apples are mangoes. II. All mangoes are oranges.", options: ["Option A", "Option B", "Option C", "Option D"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "Statements: All roses are red. Some red things are fragrant. Conclusions: I. Some roses are fragrant. II. All fragrant things are red.", options: ["Option A", "Option B", "Option C", "Option D"], correct_answer: "D", difficulty: "medium" },
+  { question_text: "Statements: All students are boys. All boys are tall. Conclusions: I. All students are tall. II. Some tall people are students.", options: ["Option A", "Option B", "Option C", "Option D"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "Statement: \"Use Hawa detergent for sparkling white clothes.\" Assumptions: I. People want white clothes. II. No other detergent can make clothes white.", options: ["Option A", "Option B", "Option C", "Option D"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "Only some students who attended the coaching class passed the exam. Ravi attended the coaching class. Which is certainly true?", options: ["Ravi passed", "Ravi failed", "Ravi may or may not have passed", "All students passed"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "What is the angle between the hands of a clock at 4:20?", options: ["0\u00b0", "10\u00b0", "20\u00b0", "30\u00b0"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "At what time between 4 and 5 o'clock do the hands of a clock coincide?", options: ["4:20", "4:22", "4:21 9/11", "4:24"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "A clock is set right at 8 AM and gains 10 minutes in 24 hours. What time will it show when the true time is 8 PM the same day?", options: ["8:05 PM", "8:10 PM", "8:15 PM", "7:55 PM"], correct_answer: "A", difficulty: "medium" },
+  { question_text: "If 1 January 2024 was a Monday, what day was 1 January 2025?", options: ["Tuesday", "Wednesday", "Thursday", "Friday"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "If 15 August is a Saturday, what day is 25 September of the same year?", options: ["Thursday", "Saturday", "Friday", "Sunday"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "How many odd days are there in 100 years?", options: ["2", "3", "5", "6"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "How many 3-letter arrangements can be made from the letters of LOGIC without repetition?", options: ["20", "60", "120", "125"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "In how many ways can 5 people stand in a line if two particular people must always stand together?", options: ["24", "96", "48", "72"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "Two dice are thrown. The probability that the sum is 7 is:", options: ["1/12", "1/9", "1/6", "1/4"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "A bag has 4 red, 3 blue and 2 green balls. One ball is drawn at random. The probability that it is not blue is:", options: ["1/3", "4/9", "2/3", "3/4"], correct_answer: "C", difficulty: "medium" },
+  { question_text: "In how many ways can a committee of 3 be chosen from 6 people?", options: ["15", "20", "30", "120"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "A cube painted red on all faces is cut into 27 equal small cubes. How many small cubes have exactly two faces painted?", options: ["6", "8", "12", "24"], correct_answer: "C", difficulty: "medium" },
+];
+
+/**
  * Main entrance to extract or populate questions for a round.
  * Tries parsing text from PDF; if empty or scanned, dynamically provides
  * genuine Aptitude & Reasoning questions matching the candidate's test domain.
@@ -281,9 +389,15 @@ export function processPdfQuestions(
   // 2. If PDF was image-scanned or parsing yielded fewer questions, fill from the 100 Aptitude & Reasoning Bank
   const isAptitude = fileName.toLowerCase().includes('aptitude') || fileName.toLowerCase().includes('reasoning') || fileName.toLowerCase().includes('basic') || true;
   
+  const isMedium =
+    fileName.toLowerCase().includes('medium') ||
+    roundId.toLowerCase().includes('-2') ||
+    roundId.toLowerCase().includes('round-2');
+  const bankToUse = isMedium ? MEDIUM_APTITUDE_REASONING_BANK : APTITUDE_REASONING_BANK;
+
   if (parsedItems.length < targetCount) {
     const existingTexts = new Set(parsedItems.map((p) => p.question_text.toLowerCase()));
-    for (const item of APTITUDE_REASONING_BANK) {
+    for (const item of bankToUse) {
       if (!existingTexts.has(item.question_text.toLowerCase())) {
         parsedItems.push(item);
         if (parsedItems.length >= targetCount) break;

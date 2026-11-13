@@ -563,6 +563,12 @@ function ExaminationEngineContent() {
         return;
       }
 
+      if (data.data && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`mentneo_result_${attempt.id}`, JSON.stringify(data.data));
+        } catch {}
+      }
+
       toast.success('Examination round submitted successfully.');
       router.push(`/exam/${slug}/result?attemptId=${attempt.id}`);
     } catch {
