@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { AdminLayoutWrapper } from '@/components/common/admin-layout';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -29,6 +29,8 @@ import {
   ShieldAlert,
   Settings,
   Save,
+  Code2,
+  Terminal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Question, OCRJob, Difficulty, Examination, ExaminationRound } from '@/types';
@@ -36,8 +38,10 @@ import { Question, OCRJob, Difficulty, Examination, ExaminationRound } from '@/t
 function RoundQuestionsContent() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const examId = params.examId as string;
   const roundId = params.roundId as string;
+  const actionParam = searchParams.get('action');
 
   const [exam, setExam] = React.useState<Examination | null>(null);
   const [round, setRound] = React.useState<ExaminationRound | null>(null);
@@ -256,11 +260,35 @@ function RoundQuestionsContent() {
       setRoundNegativeMarks(resolvedRound.negative_marks ?? 0);
       setRoundQualifyingMarks(resolvedRound.qualifying_marks ?? 15);
 
-      // 2. Fetch questions strictly belonging to this round
+      // 2. Fetch questions strictly belonging to this round with localStorage resilient fallback
       const qRes = await fetch(`/api/questions?roundId=${roundId}&isAdmin=true`);
       const qJson = await qRes.json();
-      if (qJson.success) {
-        setQuestions(qJson.data || []);
+      let roundQuestions: Question[] = [];
+
+      if (qJson.success && Array.isArray(qJson.data) && qJson.data.length > 0) {
+        roundQuestions = qJson.data;
+      } else if (typeof window !== 'undefined') {
+        try {
+          const storedQ = localStorage.getItem(`mentneo_questions_${roundId}`);
+          if (storedQ) {
+            roundQuestions = JSON.parse(storedQ);
+            // Repopulate serverless instance if needed
+            roundQuestions.forEach((q) => {
+              fetch('/api/questions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(q),
+              }).catch(() => {});
+            });
+          }
+        } catch {}
+      }
+
+      setQuestions(roundQuestions);
+      if (typeof window !== 'undefined' && roundQuestions.length > 0) {
+        try {
+          localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(roundQuestions));
+        } catch {}
       }
 
       // 3. Fetch OCR jobs
@@ -283,6 +311,12 @@ function RoundQuestionsContent() {
   React.useEffect(() => {
     fetchRoundData();
   }, [examId, roundId]);
+
+  React.useEffect(() => {
+    if (actionParam === 'create') {
+      handleOpenCreate();
+    }
+  }, [actionParam]);
 
   // Handle PDF Upload specifically for this round
   const handleUploadPDF = async (e: React.FormEvent) => {
@@ -380,7 +414,14 @@ function RoundQuestionsContent() {
 
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!qText.trim() || !qOptA.trim() || !qOptB.trim()) {
+    const isCodingRound = round?.round_type === 'coding';
+
+    if (!qText.trim()) {
+      toast.error('Question statement / problem prompt is required.');
+      return;
+    }
+
+    if (!isCodingRound && (!qOptA.trim() || !qOptB.trim())) {
       toast.error('Question text and at least options A and B are required.');
       return;
     }
@@ -391,17 +432,20 @@ function RoundQuestionsContent() {
         id: editingQuestion?.id,
         round_id: roundId,
         question_text: qText.trim(),
+        question_type: isCodingRound ? ('coding' as const) : ('single_choice' as const),
         difficulty: qDifficulty,
         marks: Number(qMarks),
-        negative_marks: Number(qNegativeMarks),
-        correct_option_label: qCorrect,
-        status: 'approved',
-        options: [
-          { label: 'A', option_text: qOptA.trim(), sort_order: 1 },
-          { label: 'B', option_text: qOptB.trim(), sort_order: 2 },
-          { label: 'C', option_text: qOptC.trim(), sort_order: 3 },
-          { label: 'D', option_text: qOptD.trim(), sort_order: 4 },
-        ].filter((o) => Boolean(o.option_text)),
+        negative_marks: isCodingRound ? 0 : Number(qNegativeMarks),
+        correct_option_label: isCodingRound ? undefined : qCorrect,
+        status: 'approved' as const,
+        options: isCodingRound
+          ? []
+          : [
+              { label: 'A' as const, option_text: qOptA.trim(), sort_order: 1 },
+              { label: 'B' as const, option_text: qOptB.trim(), sort_order: 2 },
+              { label: 'C' as const, option_text: qOptC.trim(), sort_order: 3 },
+              { label: 'D' as const, option_text: qOptD.trim(), sort_order: 4 },
+            ].filter((o) => Boolean(o.option_text)),
       };
 
       const res = await fetch('/api/questions', {
@@ -416,7 +460,13 @@ function RoundQuestionsContent() {
         return;
       }
 
-      toast.success(editingQuestion ? 'Question updated.' : `Question published to Round ${round?.round_number} bank.`);
+      toast.success(
+        editingQuestion
+          ? 'Question updated.'
+          : isCodingRound
+          ? `Coding problem published to Round ${round?.round_number} sandbox bank.`
+          : `Question published to Round ${round?.round_number} bank.`
+      );
       setCreateModalOpen(false);
       fetchRoundData();
     } catch {
@@ -486,35 +536,61 @@ function RoundQuestionsContent() {
               <span>Round Settings</span>
             </Button>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setUploadModalOpen(true)}
-              className="text-xs uppercase tracking-wider font-semibold gap-1.5"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Upload PDF for Round {round?.round_number || 1}</span>
-            </Button>
+            {round?.round_type === 'coding' ? (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  isLoading={populating}
+                  onClick={handlePopulateRound}
+                  className="text-xs uppercase tracking-wider font-semibold gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Populate Sample Coding Problems</span>
+                </Button>
 
-            <Button
-              variant="outline"
-              size="sm"
-              isLoading={populating}
-              onClick={handlePopulateRound}
-              className="text-xs uppercase tracking-wider font-semibold gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Populate 100 MCQs</span>
-            </Button>
+                <Button
+                  size="sm"
+                  onClick={handleOpenCreate}
+                  className="text-xs uppercase tracking-wider font-semibold gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700 shadow-xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Create Coding Problem</span>
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setUploadModalOpen(true)}
+                  className="text-xs uppercase tracking-wider font-semibold gap-1.5"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload PDF for Round {round?.round_number || 1}</span>
+                </Button>
 
-            <Button
-              size="sm"
-              onClick={handleOpenCreate}
-              className="text-xs uppercase tracking-wider font-semibold gap-1.5 bg-gray-900 text-white hover:bg-black"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Create Question</span>
-            </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  isLoading={populating}
+                  onClick={handlePopulateRound}
+                  className="text-xs uppercase tracking-wider font-semibold gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Populate 100 MCQs</span>
+                </Button>
+
+                <Button
+                  size="sm"
+                  onClick={handleOpenCreate}
+                  className="text-xs uppercase tracking-wider font-semibold gap-1.5 bg-gray-900 text-white hover:bg-black"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Create Question</span>
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -649,11 +725,39 @@ function RoundQuestionsContent() {
             </div>
           ) : filtered.length === 0 ? (
             <div className="p-12 text-center text-xs text-gray-500 bg-white rounded-xl border border-gray-200 space-y-3">
-              <p>No questions found in Round {round?.round_number || 1} bank.</p>
-              <Button size="sm" onClick={() => setUploadModalOpen(true)} className="text-xs gap-1.5 font-semibold">
-                <Upload className="w-3.5 h-3.5" />
-                <span>Upload Question Paper PDF for Round {round?.round_number || 1}</span>
-              </Button>
+              <p>
+                {round?.round_type === 'coding'
+                  ? `No coding problems configured in Round ${round?.round_number || 1} bank.`
+                  : `No questions found in Round ${round?.round_number || 1} bank.`}
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {round?.round_type === 'coding' ? (
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={handleOpenCreate}
+                      className="text-xs gap-1.5 font-semibold bg-indigo-600 text-white hover:bg-indigo-700 shadow-xs"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Create Coding Problem</span>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handlePopulateRound}
+                      className="text-xs gap-1.5 font-semibold border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Populate Sample Coding Problems</span>
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" onClick={() => setUploadModalOpen(true)} className="text-xs gap-1.5 font-semibold">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload Question Paper PDF for Round {round?.round_number || 1}</span>
+                  </Button>
+                )}
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
@@ -668,18 +772,18 @@ function RoundQuestionsContent() {
                         {index + 1}
                       </span>
                       <div>
-                        <p className="text-sm font-semibold text-gray-900 leading-snug">
+                        <p className="text-sm font-semibold text-gray-900 leading-snug whitespace-pre-line font-mono text-xs sm:text-sm">
                           {q.question_text}
                         </p>
                         <div className="flex flex-wrap items-center gap-2 mt-2">
                           <span className="px-2 py-0.5 rounded-sm bg-gray-100 text-gray-700 text-[10px] font-semibold">
-                            Round {round?.round_number} Bank
+                            Round {round?.round_number} {q.question_type === 'coding' || round?.round_type === 'coding' ? 'Coding Sandbox' : 'Bank'}
                           </span>
                           <Badge variant={q.difficulty === 'hard' ? 'danger' : q.difficulty === 'medium' ? 'warning' : 'neutral'} size="sm">
                             {q.difficulty}
                           </Badge>
                           <span className="text-[11px] text-gray-400 font-mono">
-                            +{q.marks} pts / -{q.negative_marks} pts
+                            +{q.marks} pts {q.negative_marks ? `/ -${q.negative_marks} pts` : ''}
                           </span>
                         </div>
                       </div>
@@ -706,32 +810,46 @@ function RoundQuestionsContent() {
                     </div>
                   </div>
 
-                  {/* Options Grid */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-gray-100">
-                    {q.options?.map((opt, optIndex) => {
-                      const isCorrect = opt.label === q.correct_option_label;
-                      return (
-                        <div
-                          key={`round-${roundId}-q-${q.id || index}-opt-${opt.label || optIndex}-${optIndex}`}
-                          className={`p-2.5 rounded-lg border text-xs flex items-center gap-2.5 ${
-                            isCorrect
-                              ? 'border-emerald-300 bg-emerald-50/60 text-emerald-950 font-medium'
-                              : 'border-gray-200 bg-white text-gray-700'
-                          }`}
-                        >
-                          <span
-                            className={`w-5 h-5 rounded-md flex items-center justify-center font-bold text-[10px] font-mono shrink-0 ${
-                              isCorrect ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-600'
+                  {/* Options Grid or Coding Problem Banner */}
+                  {q.question_type === 'coding' || round?.round_type === 'coding' ? (
+                    <div className="p-3 rounded-lg border border-indigo-100 bg-indigo-50/50 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-indigo-950">
+                      <div className="flex items-center gap-2">
+                        <Code2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <span className="font-semibold">Algorithmic Sandbox Challenge</span>
+                        <span className="text-gray-400">•</span>
+                        <span className="text-gray-600 font-mono text-[11px]">Runtimes: Python 3, Java (OpenJDK)</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-sm uppercase tracking-wider w-fit">
+                        Automated Test Suite
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-gray-100">
+                      {q.options?.map((opt, optIndex) => {
+                        const isCorrect = opt.label === q.correct_option_label;
+                        return (
+                          <div
+                            key={`round-${roundId}-q-${q.id || index}-opt-${opt.label || optIndex}-${optIndex}`}
+                            className={`p-2.5 rounded-lg border text-xs flex items-center gap-2.5 ${
+                              isCorrect
+                                ? 'border-emerald-300 bg-emerald-50/60 text-emerald-950 font-medium'
+                                : 'border-gray-200 bg-white text-gray-700'
                             }`}
                           >
-                            {opt.label}
-                          </span>
-                          <span className="flex-1">{opt.option_text}</span>
-                          {isCorrect && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
-                        </div>
-                      );
-                    })}
-                  </div>
+                            <span
+                              className={`w-5 h-5 rounded-md flex items-center justify-center font-bold text-[10px] font-mono shrink-0 ${
+                                isCorrect ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {opt.label}
+                            </span>
+                            <span className="flex-1">{opt.option_text}</span>
+                            {isCorrect && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -925,24 +1043,71 @@ function RoundQuestionsContent() {
         </form>
       </Dialog>
 
-      {/* Question Manual Create / Edit Modal */}
+      {/* Question Manual Create / Edit Modal (Dynamic for Coding vs MCQ) */}
       <Dialog
         isOpen={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        title={editingQuestion ? `Edit Round ${round?.round_number} Question` : `Add Question to Round ${round?.round_number}`}
-        description={`This MCQ will be added directly into Round ${round?.round_number}: ${round?.name}.`}
+        title={
+          round?.round_type === 'coding'
+            ? editingQuestion
+              ? `Edit Coding Problem`
+              : `Add Coding Problem to Round ${round?.round_number || 3}`
+            : editingQuestion
+            ? `Edit Round ${round?.round_number} Question`
+            : `Add Question to Round ${round?.round_number}`
+        }
+        description={
+          round?.round_type === 'coding'
+            ? `Configure the algorithmic problem statement, specifications, constraints, and test cases for Round ${round?.round_number}: ${round?.name}.`
+            : `This MCQ will be added directly into Round ${round?.round_number}: ${round?.name}.`
+        }
         maxWidth="lg"
       >
         <form onSubmit={handleSaveQuestion} className="space-y-4 max-h-[75vh] overflow-y-auto pr-1 pt-2">
+          {round?.round_type === 'coding' && (
+            <div className="flex items-center justify-between bg-indigo-50/70 p-3 rounded-lg border border-indigo-200">
+              <div className="flex items-center gap-2">
+                <Code2 className="w-4 h-4 text-indigo-700" />
+                <span className="text-xs font-semibold text-indigo-900">
+                  Algorithmic Sandbox (Python 3 & Java)
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setQText(`### Algorithmic Problem: Array Interval Merging Engine
+
+Given an array of meeting or scheduling time intervals where intervals[i] = [start_i, end_i], merge all overlapping intervals, and return an array of the non-overlapping intervals that cover all the intervals in the input.
+
+#### Specifications:
+- **Input**: \`intervals\` (Array of [start, end] pairs).
+- **Output**: Return the merged list of non-overlapping intervals sorted by start time.
+
+#### Constraints & Test Cases:
+- \`intervals = [[1,3],[2,6],[8,10],[15,18]]\` -> Returns \`[[1,6],[8,10],[15,18]]\`
+- \`intervals = [[1,4],[4,5]]\` -> Returns \`[[1,5]]\`
+
+Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in the sandbox editor below.`);
+                }}
+                className="text-[11px] h-6 px-2 text-indigo-700 border-indigo-300 hover:bg-indigo-100/60"
+              >
+                Insert Problem Template
+              </Button>
+            </div>
+          )}
+
           <Textarea
-            label="Question Stem / Statement"
-            placeholder="Type question prompt..."
+            label={round?.round_type === 'coding' ? 'Problem Statement & Specifications (Markdown)' : 'Question Stem / Statement'}
+            placeholder={round?.round_type === 'coding' ? 'Describe the algorithmic problem, input/output specifications, constraints, and test cases...' : 'Type question prompt...'}
             value={qText}
+            rows={round?.round_type === 'coding' ? 10 : 4}
             onChange={(e) => setQText(e.target.value)}
             required
           />
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className={`grid ${round?.round_type === 'coding' ? 'grid-cols-2' : 'grid-cols-3'} gap-3`}>
             <div>
               <label className="text-xs font-semibold text-gray-700 tracking-wide block mb-1.5">Difficulty</label>
               <select
@@ -965,67 +1130,76 @@ function RoundQuestionsContent() {
               required
             />
 
-            <Input
-              label="Negative Marks"
-              type="number"
-              step="0.25"
-              value={qNegativeMarks}
-              onChange={(e) => setQNegativeMarks(parseFloat(e.target.value) || 0)}
-              required
-            />
+            {round?.round_type !== 'coding' && (
+              <Input
+                label="Negative Marks"
+                type="number"
+                step="0.25"
+                value={qNegativeMarks}
+                onChange={(e) => setQNegativeMarks(parseFloat(e.target.value) || 0)}
+                required
+              />
+            )}
           </div>
 
-          <div className="space-y-3 pt-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-gray-700 block">
-              Options & Answer Key
-            </span>
+          {round?.round_type !== 'coding' ? (
+            <div className="space-y-3 pt-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-700 block">
+                Options & Answer Key
+              </span>
 
-            <Input
-              label="Option A"
-              placeholder="Text for option A"
-              value={qOptA}
-              onChange={(e) => setQOptA(e.target.value)}
-              required
-            />
+              <Input
+                label="Option A"
+                placeholder="Text for option A"
+                value={qOptA}
+                onChange={(e) => setQOptA(e.target.value)}
+                required
+              />
 
-            <Input
-              label="Option B"
-              placeholder="Text for option B"
-              value={qOptB}
-              onChange={(e) => setQOptB(e.target.value)}
-              required
-            />
+              <Input
+                label="Option B"
+                placeholder="Text for option B"
+                value={qOptB}
+                onChange={(e) => setQOptB(e.target.value)}
+                required
+              />
 
-            <Input
-              label="Option C"
-              placeholder="Text for option C"
-              value={qOptC}
-              onChange={(e) => setQOptC(e.target.value)}
-            />
+              <Input
+                label="Option C"
+                placeholder="Text for option C"
+                value={qOptC}
+                onChange={(e) => setQOptC(e.target.value)}
+              />
 
-            <Input
-              label="Option D"
-              placeholder="Text for option D"
-              value={qOptD}
-              onChange={(e) => setQOptD(e.target.value)}
-            />
+              <Input
+                label="Option D"
+                placeholder="Text for option D"
+                value={qOptD}
+                onChange={(e) => setQOptD(e.target.value)}
+              />
 
-            <div>
-              <label className="text-xs font-semibold text-gray-700 tracking-wide block mb-1.5">
-                Correct Answer Key
-              </label>
-              <select
-                value={qCorrect}
-                onChange={(e) => setQCorrect(e.target.value)}
-                className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-xs text-gray-900 font-bold"
-              >
-                <option value="A">Option A</option>
-                <option value="B">Option B</option>
-                <option value="C">Option C</option>
-                <option value="D">Option D</option>
-              </select>
+              <div>
+                <label className="text-xs font-semibold text-gray-700 tracking-wide block mb-1.5">
+                  Correct Answer Key
+                </label>
+                <select
+                  value={qCorrect}
+                  onChange={(e) => setQCorrect(e.target.value)}
+                  className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-xs text-gray-900 font-bold"
+                >
+                  <option value="A">Option A</option>
+                  <option value="B">Option B</option>
+                  <option value="C">Option C</option>
+                  <option value="D">Option D</option>
+                </select>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="p-3 rounded-lg border border-gray-200 bg-gray-50 text-xs text-gray-600 space-y-1">
+              <span className="font-semibold text-gray-900 block">Sandbox Evaluation Mode:</span>
+              <p>Candidates will write code directly in the integrated editor. Test cases and specifications in your statement above will guide student implementations in Python 3 and Java.</p>
+            </div>
+          )}
 
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
             <Button

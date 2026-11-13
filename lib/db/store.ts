@@ -629,6 +629,88 @@ if (typeof store.rebuildIndexes === 'function') {
 // ============================================================
 // DATA ACCESS SERVICE
 // ============================================================
+export const STANDARD_CODING_PROBLEMS = [
+  {
+    title: 'Algorithmic Problem: Array Interval Merging Engine',
+    text: `### Algorithmic Problem: Array Interval Merging Engine
+
+Given an array of meeting or scheduling time intervals where intervals[i] = [start_i, end_i], merge all overlapping intervals, and return an array of the non-overlapping intervals that cover all the intervals in the input.
+
+#### Specifications:
+- **Input**: \`intervals\` (Array of [start, end] pairs).
+- **Output**: Return the merged list of non-overlapping intervals sorted by start time.
+
+#### Constraints & Test Cases:
+- \`intervals = [[1,3],[2,6],[8,10],[15,18]]\` -> Returns \`[[1,6],[8,10],[15,18]]\`
+- \`intervals = [[1,4],[4,5]]\` -> Returns \`[[1,5]]\`
+
+Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in the sandbox editor below.`,
+    difficulty: 'medium' as Difficulty,
+  },
+  {
+    title: 'Two-Sum Optimal Target Search Engine',
+    text: `### Algorithmic Problem: Two-Sum Target Search
+
+Given an array of integers \`nums\` and an integer \`target\`, return indices of the two numbers such that they add up to \`target\`.
+
+#### Specifications:
+- **Input**: \`nums\` (Integer Array), \`target\` (Integer).
+- **Output**: Return 0-indexed integer indices of the two matching numbers.
+
+#### Constraints & Test Cases:
+- \`nums = [2,7,11,15], target = 9\` -> Returns \`[0,1]\`
+- \`nums = [3,2,4], target = 6\` -> Returns \`[1,2]\`
+
+Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in the sandbox editor below.`,
+    difficulty: 'easy' as Difficulty,
+  },
+  {
+    title: 'Longest Substring Without Repeating Characters',
+    text: `### Algorithmic Problem: Longest Substring Without Repeating Characters
+
+Given a string \`s\`, find the length of the longest substring without duplicate characters.
+
+#### Specifications:
+- **Input**: \`s\` (String).
+- **Output**: Return the integer length of the longest distinct substring.
+
+#### Constraints & Test Cases:
+- \`s = "abcabcbb"\` -> Returns \`3\`
+- \`s = "bbbbb"\` -> Returns \`1\`
+- \`s = "pwwkew"\` -> Returns \`3\`
+
+Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in the sandbox editor below.`,
+    difficulty: 'medium' as Difficulty,
+  },
+  {
+    title: 'Balanced Parentheses & Bracket Validation',
+    text: `### Algorithmic Problem: Balanced Parentheses & Bracket Validation
+
+Given a string \`s\` containing just the characters '(', ')', '{', '}', '[' and ']', determine if the input string is valid.
+
+#### Constraints & Test Cases:
+- \`s = "()"\` -> Returns \`true\`
+- \`s = "()[]{}"\` -> Returns \`true\`
+- \`s = "(]"\` -> Returns \`false\`
+
+Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in the sandbox editor below.`,
+    difficulty: 'easy' as Difficulty,
+  },
+  {
+    title: 'Least Recently Used (LRU) Cache Architecture',
+    text: `### Algorithmic Problem: Least Recently Used (LRU) Cache Architecture
+
+Design and implement a data structure for a Least Recently Used (LRU) cache with O(1) time complexity for both \`get\` and \`put\` operations.
+
+#### Specifications:
+- **Input**: Cache operations and key-value inputs.
+- **Output**: Eviction tracking and key values.
+
+Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in the sandbox editor below.`,
+    difficulty: 'hard' as Difficulty,
+  },
+];
+
 // In-flight atomic submission locks to prevent concurrent race conditions
 const inFlightSubmissions = new Set<string>();
 
@@ -2624,6 +2706,41 @@ export const db = {
     let round = await this.getRoundById(roundId);
     if (!round) {
       throw new Error(`Round ${roundId} could not be resolved`);
+    }
+
+    const isCoding = round.round_type === 'coding' || round.name.toLowerCase().includes('coding');
+
+    if (isCoding) {
+      const existing = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
+      const codingCount = Math.min(count, STANDARD_CODING_PROBLEMS.length);
+      const needed = Math.max(0, codingCount - existing.length);
+      const toCreate = needed > 0 ? needed : codingCount;
+
+      for (let i = 1; i <= toCreate; i++) {
+        const qNum = existing.length + i;
+        const qId = `q-${roundId}-${String(qNum).padStart(3, '0')}`;
+        const item = STANDARD_CODING_PROBLEMS[(qNum - 1) % STANDARD_CODING_PROBLEMS.length];
+
+        const qObj: Question = {
+          id: qId,
+          round_id: roundId,
+          question_text: item.text,
+          question_type: 'coding',
+          difficulty: item.difficulty || 'medium',
+          marks: round.marks_per_question ?? 5,
+          negative_marks: 0,
+          status: 'approved',
+          sort_order: qNum,
+          options: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        store.questions.set(qId, qObj);
+      }
+
+      resilientStorage.flushSync(() => store.toSnapshot());
+      return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
     }
 
     const isAptitude =

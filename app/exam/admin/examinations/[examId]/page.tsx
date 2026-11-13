@@ -42,10 +42,49 @@ function ExaminationDetailContent() {
   const fetchExam = async () => {
     try {
       setLoading(true);
+
+      // 0. Read user-configured data from local storage
+      let localExam: any = null;
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+          if (stored) localExam = JSON.parse(stored);
+        } catch {}
+      }
+
       const res = await fetch(`/api/examinations/${examId}`);
       const json = await res.json();
       if (json.success && json.data) {
-        setExam(json.data);
+        let finalData = json.data;
+        if (localExam) {
+          finalData = {
+            ...json.data,
+            name: localExam.name || json.data.name,
+            description: localExam.description || json.data.description,
+          };
+          if (localExam.rounds && Array.isArray(localExam.rounds)) {
+            finalData.rounds = (json.data.rounds || []).map((r: ExaminationRound) => {
+              const matched = localExam.rounds.find(
+                (lr: any) => lr.id === r.id || Number(lr.round_number) === Number(r.round_number)
+              );
+              return matched ? { ...r, ...matched } : r;
+            });
+          }
+        }
+        setExam(finalData);
+
+        // Sync local settings to server if server was missing custom data
+        if (localExam?.rounds && Array.isArray(localExam.rounds)) {
+          localExam.rounds.forEach((r: any) => {
+            fetch(`/api/examinations/${examId}/rounds`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(r),
+            }).catch(() => {});
+          });
+        }
+      } else if (localExam) {
+        setExam(localExam);
       } else {
         toast.error('Examination not found');
       }

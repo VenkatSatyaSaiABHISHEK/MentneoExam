@@ -25,6 +25,8 @@ import {
   CheckCircle2,
   HelpCircle,
   Shuffle,
+  Code2,
+  Terminal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Examination, ExaminationRound, SelectionStrategy } from '@/types';
@@ -225,10 +227,36 @@ function AdminRoundsConfigContent() {
     }
   };
 
+  const autoSaveTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
   const handleFieldChange = (idx: number, field: keyof ExaminationRound, value: any) => {
     setRounds((prev) => {
       const copy = [...prev];
       copy[idx] = { ...copy[idx], [field]: value };
+
+      // Immediate auto-save to browser local storage so user never loses their changes
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+          const parsed = stored ? JSON.parse(stored) : { id: examId, rounds: [] };
+          parsed.rounds = copy;
+          localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsed));
+        } catch {}
+      }
+
+      // Debounced background sync to serverless API
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => {
+        const roundToSave = copy[idx];
+        if (roundToSave) {
+          fetch(`/api/examinations/${examId}/rounds`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(roundToSave),
+          }).catch(() => {});
+        }
+      }, 600);
+
       return copy;
     });
   };
@@ -374,8 +402,70 @@ function AdminRoundsConfigContent() {
                 </CardHeader>
 
                 <CardContent className="space-y-5 pt-5">
-                  {/* Question Pool & PDF Analysis Status Bar */}
-                  {round.round_type !== 'coding' && (
+                  {/* Question Pool & Problem Management Status Bar */}
+                  {round.round_type === 'coding' ? (
+                    <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="flex items-center gap-2.5">
+                          <Code2 className="w-4 h-4 text-indigo-700 shrink-0" />
+                          <div>
+                            <span className="text-xs font-bold text-gray-900 block">
+                              Coding Sandbox Pool: {poolCount} Coding Problems in Bank
+                            </span>
+                            <span className="text-[11px] text-gray-500 block">
+                              Candidates are served: {round.total_questions} algorithmic problems in interactive sandbox editor (Python 3 & Java)
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            isLoading={populatingRoundId === round.id}
+                            onClick={() => handlePopulateQuestions(round.id)}
+                            className="text-[11px] h-7 px-2.5 gap-1.5 font-semibold border-indigo-300 text-indigo-700 hover:bg-indigo-100/60"
+                          >
+                            <Sparkles className="w-3 h-3 text-indigo-600" />
+                            <span>Populate Sample Coding Problems</span>
+                          </Button>
+
+                          <Link
+                            href={`/exam/admin/examinations/${examId}/rounds/${round.id}/questions?action=create`}
+                            className="text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-2.5 py-1 rounded-md flex items-center gap-1 shadow-xs"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Add Coding Question</span>
+                          </Link>
+
+                          <Link
+                            href={`/exam/admin/examinations/${examId}/rounds/${round.id}/questions`}
+                            className="text-[11px] font-semibold text-gray-700 hover:text-gray-900 px-2.5 py-1 rounded-md border border-gray-200 bg-white flex items-center gap-1"
+                          >
+                            <span>Manage Round {round.round_number} Coding Bank ({poolCount})</span>
+                            <ArrowRight className="w-3 h-3 text-gray-400" />
+                          </Link>
+                        </div>
+                      </div>
+
+                      {poolCount >= round.total_questions ? (
+                        <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center gap-2 text-xs text-emerald-800">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>
+                            <strong>Coding Sandbox Active:</strong> Bank contains <strong>{poolCount} problems</strong>. Each candidate receives <strong>{round.total_questions} problems</strong> to implement in Python 3 or Java with automated code evaluation.
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 flex items-center gap-2 text-xs text-amber-800">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>
+                            Bank contains {poolCount} problems (needs {round.total_questions}). Click <strong>Add Coding Question</strong> or <strong>Populate Sample Coding Problems</strong> to add problems for candidates.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
                     <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/60 space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                         <div className="flex items-center gap-2.5">
