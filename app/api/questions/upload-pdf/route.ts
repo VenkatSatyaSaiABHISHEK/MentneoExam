@@ -48,7 +48,8 @@ export async function GET() {
       process.env.OCR_SERVICE_URL &&
         (process.env.OCR_SERVICE_URL.includes('localhost') || process.env.OCR_SERVICE_URL.includes('127.0.0.1'))
     );
-    if (process.env.OCR_SERVICE_URL && (!process.env.VERCEL || !isLocalhost)) {
+    const isCloudEnv = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+    if (process.env.OCR_SERVICE_URL && !(isCloudEnv && isLocalhost)) {
       try {
         const baseUrl = process.env.OCR_SERVICE_URL.endsWith('/')
           ? process.env.OCR_SERVICE_URL

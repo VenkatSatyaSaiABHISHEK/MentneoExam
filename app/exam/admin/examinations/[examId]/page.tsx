@@ -90,17 +90,6 @@ function ExaminationDetailContent() {
         }
 
         setExam(finalData);
-
-        // Sync local settings to server if server was missing custom data
-        if (localExam?.rounds && Array.isArray(localExam.rounds)) {
-          localExam.rounds.forEach((r: any) => {
-            fetch(`/api/examinations/${examId}/rounds`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(r),
-            }).catch(() => {});
-          });
-        }
       } else if (localExam) {
         setExam(localExam);
         // Automatically sync localExam to server so foreign key constraints and serverless calls succeed

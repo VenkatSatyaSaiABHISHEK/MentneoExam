@@ -560,6 +560,32 @@ export const db = {
 
   // ROUNDS
   async getRoundsByExamId(examId: string): Promise<ExaminationRound[]> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('examination_rounds')
+          .select('*')
+          .eq('examination_id', examId)
+          .order('round_number', { ascending: true });
+        if (!error && data && data.length > 0) {
+          const rounds = data as ExaminationRound[];
+          rounds.forEach((r) => store.rounds.set(r.id, r));
+          return rounds.map((r) => {
+            const memoryCount = Array.from(store.questions.values()).filter(
+              (q) => q.round_id === r.id && (q.status === 'approved' || !q.status)
+            ).length;
+            return {
+              ...r,
+              question_pool_count: Math.max(r.question_pool_count || 0, memoryCount),
+            };
+          });
+        }
+      } catch (err) {
+        console.warn('[Supabase getRoundsByExamId error]', err);
+      }
+    }
+
     let rounds = Array.from(store.rounds.values())
       .filter((r) => r.examination_id === examId)
       .sort((a, b) => a.round_number - b.round_number);
@@ -571,25 +597,6 @@ export const db = {
         rounds = Array.from(store.rounds.values())
           .filter((r) => r.examination_id === examId)
           .sort((a, b) => a.round_number - b.round_number);
-      }
-    }
-
-    if (rounds.length === 0) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('examination_rounds')
-            .select('*')
-            .eq('examination_id', examId)
-            .order('round_number', { ascending: true });
-          if (!error && data && data.length > 0) {
-            rounds = data as ExaminationRound[];
-            rounds.forEach((r) => store.rounds.set(r.id, r));
-          }
-        } catch {
-          // Fall back to store
-        }
       }
     }
 
@@ -606,32 +613,30 @@ export const db = {
       ).length;
       return {
         ...r,
-        question_pool_count: poolCount,
+        question_pool_count: Math.max(r.question_pool_count || 0, poolCount),
       };
     });
   },
 
   async getRoundById(roundId: string): Promise<ExaminationRound | null> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase.from('examination_rounds').select('*').eq('id', roundId).maybeSingle();
+        if (data) {
+          const round = data as ExaminationRound;
+          store.rounds.set(roundId, round);
+          return round;
+        }
+      } catch {}
+    }
+
     let round = store.rounds.get(roundId);
     if (!round) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.rounds) {
         store.hydrate(snap);
         round = store.rounds.get(roundId);
-      }
-    }
-    if (!round) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data } = await supabase.from('examination_rounds').select('*').eq('id', roundId).single();
-          if (data) {
-            round = data as ExaminationRound;
-            store.rounds.set(roundId, round);
-          }
-        } catch {
-          // ignore
-        }
       }
     }
     return round || null;
@@ -643,16 +648,19 @@ export const db = {
   },
 
   async createOrUpdateRound(round: Partial<ExaminationRound>): Promise<ExaminationRound> {
-    const existing = round.id ? store.rounds.get(round.id) : undefined;
-    const existingRounds = Array.from(store.rounds.values()).filter(
-      (r) => r.examination_id === round.examination_id
-    );
+    const existingRounds = round.examination_id ? await this.getRoundsByExamId(round.examination_id) : [];
+
+    // Deterministic match by ID or round_number to prevent duplicate rounds
+    const existing = round.id
+      ? (store.rounds.get(round.id) || existingRounds.find((r) => r.id === round.id))
+      : (round.round_number !== undefined ? existingRounds.find((r) => r.round_number === round.round_number) : undefined);
+
     const maxRoundNumber = existingRounds.length > 0
       ? Math.max(...existingRounds.map((r) => r.round_number))
       : 0;
 
-    const id = round.id || existing?.id || `round-${Date.now()}`;
     const roundNumber = round.round_number ?? existing?.round_number ?? (maxRoundNumber + 1);
+    const id = round.id || existing?.id || `round-${round.examination_id || 'exam'}-${roundNumber}`;
 
     const totalQuestions = Number(
       round.total_questions !== undefined ? round.total_questions : (existing?.total_questions ?? 30)
@@ -686,7 +694,7 @@ export const db = {
       total_marks: totalMarks,
       question_selection_strategy: round.question_selection_strategy ?? existing?.question_selection_strategy ?? 'random',
       scheduled_start: round.scheduled_start !== undefined ? round.scheduled_start : (existing?.scheduled_start ?? null),
-      status: round.status ?? existing?.status ?? 'draft',
+      status: round.status ?? existing?.status ?? 'active',
       auto_qualify: round.auto_qualify !== undefined ? round.auto_qualify : (existing?.auto_qualify ?? true),
       instructions: round.instructions !== undefined ? round.instructions : (existing?.instructions ?? ''),
       round_type: round.round_type ?? existing?.round_type ?? 'mcq',
@@ -706,6 +714,7 @@ export const db = {
       success_message: round.success_message !== undefined ? round.success_message : (existing?.success_message ?? ''),
       failure_message: round.failure_message !== undefined ? round.failure_message : (existing?.failure_message ?? ''),
       coding_language_support: round.coding_language_support ?? existing?.coding_language_support ?? ['python', 'java'],
+      question_pool_count: existing?.question_pool_count ?? round.question_pool_count ?? 0,
       created_at: existing?.created_at || round.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -717,8 +726,8 @@ export const db = {
     if (supabase) {
       try {
         await supabase.from('examination_rounds').upsert(roundData);
-      } catch {
-        // Fall back to store
+      } catch (err) {
+        console.warn('[Supabase createOrUpdateRound error]', err);
       }
     }
 
@@ -906,6 +915,34 @@ export const db = {
   },
 
   async getRegistrationsByExamId(examId: string): Promise<Registration[]> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('registrations')
+          .select('*, student:students(*)')
+          .eq('examination_id', examId);
+        if (!error && data && data.length > 0) {
+          data.forEach((r: any) => {
+            store.registrations.set(r.id, r);
+            if (r.student) {
+              store.students.set(r.student.id, r.student);
+              if (r.student.roll_number) {
+                if (!store.studentByRoll) store.studentByRoll = new Map();
+                store.studentByRoll.set(r.student.roll_number.trim().toUpperCase(), r.student.id);
+              }
+            }
+          });
+          return (data as Registration[]).map((r) => ({
+            ...r,
+            student: store.students.get(r.student_id) || r.student,
+          }));
+        }
+      } catch (err) {
+        console.warn('[Supabase getRegistrationsByExamId error]', err);
+      }
+    }
+
     let regs = Array.from(store.registrations.values()).filter((r) => r.examination_id === examId);
 
     if (regs.length === 0) {
@@ -913,33 +950,6 @@ export const db = {
       if (snap && snap.registrations) {
         store.hydrate(snap);
         regs = Array.from(store.registrations.values()).filter((r) => r.examination_id === examId);
-      }
-    }
-
-    if (regs.length === 0) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('registrations')
-            .select('*, student:students(*)')
-            .eq('examination_id', examId);
-          if (!error && data && data.length > 0) {
-            data.forEach((r: any) => {
-              store.registrations.set(r.id, r);
-              if (r.student) {
-                store.students.set(r.student.id, r.student);
-                if (r.student.roll_number) {
-                  if (!store.studentByRoll) store.studentByRoll = new Map();
-                  store.studentByRoll.set(r.student.roll_number.trim().toUpperCase(), r.student.id);
-                }
-              }
-            });
-            regs = data as Registration[];
-          }
-        } catch (err) {
-          console.warn('[Supabase getRegistrationsByExamId error]', err);
-        }
       }
     }
 
@@ -1672,6 +1682,72 @@ export const db = {
 
   // QUESTIONS & ATTEMPTS
   async getQuestionsByRoundId(roundId: string, isAdmin = false): Promise<Question[]> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('questions')
+          .select('*, options:question_options(*), answer_key:answer_keys(*)')
+          .eq('round_id', roundId)
+          .order('sort_order', { ascending: true });
+
+        if (!error && data && data.length > 0) {
+          const list: Question[] = [];
+          data.forEach((q: any) => {
+            const options = (q.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order);
+            const qObj: Question = {
+              id: q.id,
+              bank_id: q.bank_id,
+              round_id: q.round_id,
+              question_text: q.question_text,
+              question_type: q.question_type,
+              difficulty: q.difficulty,
+              marks: Number(q.marks),
+              negative_marks: Number(q.negative_marks),
+              status: q.status,
+              ocr_confidence: q.ocr_confidence,
+              image_url: q.image_url,
+              explanation: q.explanation,
+              sort_order: q.sort_order,
+              created_at: q.created_at,
+              updated_at: q.updated_at,
+              options,
+            };
+            store.questions.set(q.id, qObj);
+            if (q.answer_key) {
+              const ak = Array.isArray(q.answer_key) ? q.answer_key[0] : q.answer_key;
+              if (ak) {
+                store.answerKeys.set(q.id, {
+                  id: ak.id || `ak-${q.id}`,
+                  question_id: q.id,
+                  correct_option_label: ak.correct_option_label || 'A',
+                  created_at: ak.created_at,
+                  updated_at: ak.updated_at,
+                });
+              }
+            }
+            if (isAdmin || q.status === 'approved' || !q.status) {
+              list.push(qObj);
+            }
+          });
+          if (list.length > 0) {
+            if (isAdmin) {
+              return list.map((q) => {
+                const ak = store.answerKeys.get(q.id);
+                return {
+                  ...q,
+                  correct_option_label: ak?.correct_option_label,
+                };
+              });
+            }
+            return list;
+          }
+        }
+      } catch (err) {
+        console.warn('[Supabase getQuestionsByRoundId error]', err);
+      }
+    }
+
     let questions = Array.from(store.questions.values())
       .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
       .sort((a, b) => a.sort_order - b.sort_order);
@@ -1683,62 +1759,6 @@ export const db = {
         questions = Array.from(store.questions.values())
           .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
           .sort((a, b) => a.sort_order - b.sort_order);
-      }
-    }
-
-    if (questions.length === 0) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('questions')
-            .select('*, options:question_options(*), answer_key:answer_keys(*)')
-            .eq('round_id', roundId)
-            .order('sort_order', { ascending: true });
-
-          if (!error && data && data.length > 0) {
-            data.forEach((q: any) => {
-              const options = (q.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order);
-              const qObj: Question = {
-                id: q.id,
-                bank_id: q.bank_id,
-                round_id: q.round_id,
-                question_text: q.question_text,
-                question_type: q.question_type,
-                difficulty: q.difficulty,
-                marks: Number(q.marks),
-                negative_marks: Number(q.negative_marks),
-                status: q.status,
-                ocr_confidence: q.ocr_confidence,
-                image_url: q.image_url,
-                explanation: q.explanation,
-                sort_order: q.sort_order,
-                created_at: q.created_at,
-                updated_at: q.updated_at,
-                options,
-              };
-              store.questions.set(q.id, qObj);
-              if (q.answer_key) {
-                const ak = Array.isArray(q.answer_key) ? q.answer_key[0] : q.answer_key;
-                if (ak) {
-                  store.answerKeys.set(q.id, {
-                    id: ak.id || `ak-${q.id}`,
-                    question_id: q.id,
-                    correct_option_label: ak.correct_option_label || 'A',
-                    created_at: ak.created_at,
-                    updated_at: ak.updated_at,
-                  });
-                }
-              }
-            });
-
-            questions = Array.from(store.questions.values())
-              .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
-              .sort((a, b) => a.sort_order - b.sort_order);
-          }
-        } catch (err) {
-          console.warn('[Supabase getQuestionsByRoundId error]', err);
-        }
       }
     }
 
@@ -1796,8 +1816,21 @@ export const db = {
         }
       }
 
+      const bankId = `bank-${roundId}`;
+      const examId = roundInDb?.examination_id || store.rounds.get(roundId)?.examination_id;
+      if (examId) {
+        await supabase.from('question_banks').upsert({
+          id: bankId,
+          examination_id: examId,
+          round_id: roundId,
+          name: store.rounds.get(roundId)?.name ? `${store.rounds.get(roundId)!.name} Question Bank` : 'Round Question Bank',
+          created_at: new Date().toISOString(),
+        });
+      }
+
       const qRows = roundQuestions.map((q) => ({
         id: q.id,
+        bank_id: bankId,
         round_id: q.round_id,
         question_text: q.question_text,
         question_type: q.question_type,
@@ -2884,6 +2917,23 @@ export const db = {
 
   // OCR JOBS
   async getOCRJobs(): Promise<OCRJob[]> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase.from('ocr_jobs').select('*').order('created_at', { ascending: false });
+        if (data && data.length > 0) {
+          data.forEach((j: any) => {
+            const existing = store.ocrJobs.get(j.id);
+            store.ocrJobs.set(j.id, {
+              ...j,
+              document_name: existing?.document_name || j.document_name || 'Question_Paper.pdf',
+              round_name: existing?.round_name || j.round_name || 'Round 1 Question Pool',
+              pdf_document_id: j.pdf_document_id || j.id,
+            });
+          });
+        }
+      } catch {}
+    }
     return Array.from(store.ocrJobs.values()).sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
@@ -2920,8 +2970,9 @@ export const db = {
         (process.env.OCR_SERVICE_URL.includes('localhost') || process.env.OCR_SERVICE_URL.includes('127.0.0.1'))
     );
 
+    const isCloudEnv = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
     // Only dispatch to external microservice if not running serverless localhost
-    if (process.env.OCR_SERVICE_URL && (!process.env.VERCEL || !isLocalhost)) {
+    if (process.env.OCR_SERVICE_URL && !(isCloudEnv && isLocalhost)) {
       try {
         const baseUrl = process.env.OCR_SERVICE_URL.endsWith('/')
           ? process.env.OCR_SERVICE_URL
@@ -3000,6 +3051,20 @@ export const db = {
       resilientStorage.flushSync(() => store.toSnapshot());
       if (params.roundId) {
         await this.syncRoundQuestionsToSupabase(params.roundId);
+      }
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          await supabase.from('ocr_jobs').upsert({
+            id: job.id,
+            status: job.status,
+            progress_percent: job.progress_percent,
+            questions_extracted: job.questions_extracted,
+            worker_id: job.worker_id,
+            completed_at: job.completed_at,
+            created_at: job.created_at,
+          });
+        } catch {}
       }
     }
 

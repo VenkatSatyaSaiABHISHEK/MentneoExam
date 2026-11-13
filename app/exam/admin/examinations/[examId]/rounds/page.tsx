@@ -102,22 +102,7 @@ function AdminRoundsConfigContent() {
         });
       }
 
-      // Authoritative count check: if pool count is 0 or undefined, query /api/questions
-      const enrichedRounds = await Promise.all(
-        roundsList.map(async (r: ExaminationRound) => {
-          if (r.question_pool_count && r.question_pool_count > 0) return r;
-          try {
-            const qRes = await fetch(`/api/questions?roundId=${r.id}`);
-            const qJson = await qRes.json();
-            if (qJson.success && Array.isArray(qJson.data)) {
-              return { ...r, question_pool_count: qJson.data.length };
-            }
-          } catch {}
-          return r;
-        })
-      );
-
-      setRounds(enrichedRounds);
+      setRounds(roundsList);
 
       const examRes = await fetch(`/api/examinations/${examId}`);
       const examJson = await examRes.json();
