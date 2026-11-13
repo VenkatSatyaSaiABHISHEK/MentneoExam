@@ -42,9 +42,13 @@ export async function GET() {
   try {
     const jobs = await db.getOCRJobs();
 
-    // Check bound OCR service health if configured
+    // Check bound OCR service health if configured (bypass localhost in cloud/serverless)
     let ocrServiceStatus = 'not_configured';
-    if (process.env.OCR_SERVICE_URL) {
+    const isLocalhost = Boolean(
+      process.env.OCR_SERVICE_URL &&
+        (process.env.OCR_SERVICE_URL.includes('localhost') || process.env.OCR_SERVICE_URL.includes('127.0.0.1'))
+    );
+    if (process.env.OCR_SERVICE_URL && (!process.env.VERCEL || !isLocalhost)) {
       try {
         const baseUrl = process.env.OCR_SERVICE_URL.endsWith('/')
           ? process.env.OCR_SERVICE_URL

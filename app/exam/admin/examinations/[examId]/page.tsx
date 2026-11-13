@@ -103,6 +103,12 @@ function ExaminationDetailContent() {
         }
       } else if (localExam) {
         setExam(localExam);
+        // Automatically sync localExam to server so foreign key constraints and serverless calls succeed
+        fetch('/api/examinations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(localExam),
+        }).catch(() => {});
       } else {
         toast.error('Examination not found');
       }

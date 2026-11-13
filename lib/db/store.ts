@@ -295,8 +295,27 @@ export const db = {
           .from('examinations')
           .select('*, rounds:examination_rounds(*)')
           .order('created_at', { ascending: false });
-        if (!error && data) {
-          return data as Examination[];
+        if (!error && data && data.length > 0) {
+          const examList: Examination[] = [];
+          for (const item of data) {
+            const rounds = (item.rounds || []).sort((a: any, b: any) => a.round_number - b.round_number);
+            const { count: regCount } = await supabase
+              .from('registrations')
+              .select('*', { count: 'exact', head: true })
+              .eq('examination_id', item.id);
+            const exObj: Examination = {
+              ...item,
+              rounds,
+              _count: {
+                registrations: regCount || 0,
+                rounds: rounds.length,
+              },
+            };
+            examList.push(exObj);
+            store.examinations.set(item.id, exObj);
+            rounds.forEach((r: any) => store.rounds.set(r.id, r));
+          }
+          return examList;
         }
       } catch {
         // Fall back to store
@@ -321,7 +340,7 @@ export const db = {
   },
 
   async getExaminationById(id: string): Promise<Examination | null> {
-    // 1. Memory-first resolution for sub-millisecond response and load resilience
+    // 1. Memory-first resolution for sub-millisecond response
     let exam = store.examinations.get(id);
     if (!exam) {
       const snap = resilientStorage.loadSnapshot();
@@ -330,33 +349,66 @@ export const db = {
         exam = store.examinations.get(id);
       }
     }
-    if (exam) {
-      const rounds = Array.from(store.rounds.values())
-        .filter((r) => r.examination_id === exam.id)
-        .sort((a, b) => a.round_number - b.round_number);
-      return {
-        ...exam,
-        rounds,
-        _count: {
-          registrations: store.registrations.size,
-          rounds: rounds.length,
-        },
-      };
-    }
 
     // 2. Fall back to Supabase if not found in memory
     const supabase = createAdminClient();
-    if (supabase) {
+    if (!exam && supabase) {
       try {
         const { data, error } = await supabase
           .from('examinations')
           .select('*, rounds:examination_rounds(*)')
           .eq('id', id)
-          .single();
-        if (!error && data) return data as Examination;
+          .maybeSingle();
+        if (!error && data) {
+          exam = data as Examination;
+          store.examinations.set(id, exam);
+          if (data.rounds) {
+            data.rounds.forEach((r: any) => store.rounds.set(r.id, r));
+          }
+        }
       } catch {
         // Fall back to store
       }
+    }
+
+    if (exam) {
+      let rounds = Array.from(store.rounds.values())
+        .filter((r) => r.examination_id === exam.id)
+        .sort((a, b) => a.round_number - b.round_number);
+
+      if (rounds.length === 0 && supabase) {
+        try {
+          const { data } = await supabase
+            .from('examination_rounds')
+            .select('*')
+            .eq('examination_id', exam.id)
+            .order('round_number', { ascending: true });
+          if (data && data.length > 0) {
+            rounds = data as ExaminationRound[];
+            rounds.forEach((r) => store.rounds.set(r.id, r));
+          }
+        } catch {}
+      }
+
+      let regCount = Array.from(store.registrations.values()).filter((r) => r.examination_id === exam.id).length;
+      if (regCount === 0 && supabase) {
+        try {
+          const { count } = await supabase
+            .from('registrations')
+            .select('*', { count: 'exact', head: true })
+            .eq('examination_id', exam.id);
+          regCount = count || 0;
+        } catch {}
+      }
+
+      return {
+        ...exam,
+        rounds,
+        _count: {
+          registrations: regCount,
+          rounds: rounds.length,
+        },
+      };
     }
 
     return null;
@@ -364,41 +416,40 @@ export const db = {
 
   async getExaminationBySlug(slug: string): Promise<Examination | null> {
     // 1. Memory-first resolution
-    let exam = Array.from(store.examinations.values()).find((e) => e.slug === slug);
+    let exam = Array.from(store.examinations.values()).find((e) => e.slug === slug || e.id === slug);
     if (!exam) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.examinations) {
         store.hydrate(snap);
-        exam = Array.from(store.examinations.values()).find((e) => e.slug === slug);
+        exam = Array.from(store.examinations.values()).find((e) => e.slug === slug || e.id === slug);
       }
-    }
-    if (exam) {
-      const rounds = Array.from(store.rounds.values())
-        .filter((r) => r.examination_id === exam.id)
-        .sort((a, b) => a.round_number - b.round_number);
-      return {
-        ...exam,
-        rounds,
-        _count: {
-          registrations: store.registrations.size,
-          rounds: rounds.length,
-        },
-      };
     }
 
     // 2. Fall back to Supabase
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('examinations')
-          .select('*, rounds:examination_rounds(*)')
-          .eq('slug', slug)
-          .single();
-        if (!error && data) return data as Examination;
-      } catch {
-        // Fall back to store
+    if (!exam) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('examinations')
+            .select('*, rounds:examination_rounds(*)')
+            .or(`slug.eq.${slug},id.eq.${slug}`)
+            .maybeSingle();
+          if (!error && data) {
+            exam = data as Examination;
+            store.examinations.set(exam.id, exam);
+            if (data.rounds) {
+              data.rounds.forEach((r: any) => store.rounds.set(r.id, r));
+            }
+          }
+        } catch {
+          // Fall back to store
+        }
       }
+    }
+
+    if (exam) {
+      return this.getExaminationById(exam.id);
     }
     return null;
   },
@@ -420,13 +471,17 @@ export const db = {
       qualification_config: examData.qualification_config || {},
       show_marks_to_students: examData.show_marks_to_students ?? true,
       max_cheating_warnings: examData.max_cheating_warnings || 3,
+      auth_mode: examData.auth_mode || 'roster',
+      login_identifier_field: examData.login_identifier_field || 'roll_number',
+      login_identifier_label: examData.login_identifier_label || 'Roll Number',
+      roster_count: examData.roster_count || 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
     if (supabase) {
       try {
-        const { error } = await supabase.from('examinations').insert(newExam);
+        const { error } = await supabase.from('examinations').upsert(newExam);
         if (!error && roundsData && roundsData.length > 0) {
           const insertRounds = roundsData.map((r, i) => ({
             ...r,
@@ -434,7 +489,7 @@ export const db = {
             round_number: r.round_number || i + 1,
             name: r.name || `Round ${i + 1}`,
           }));
-          await supabase.from('examination_rounds').insert(insertRounds);
+          await supabase.from('examination_rounds').upsert(insertRounds);
         }
       } catch {
         // continue to store
@@ -752,6 +807,47 @@ export const db = {
     store.regByExamAndRoll.set(examRollKey, regId);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
+    // Synchronize to Supabase immediately for persistent multi-container reliability
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data: exExists } = await supabase.from('examinations').select('id').eq('id', params.examId).maybeSingle();
+        if (!exExists) {
+          const exMem = store.examinations.get(params.examId);
+          await supabase.from('examinations').upsert({
+            id: params.examId,
+            name: exMem?.name || 'Campus Examination',
+            slug: exMem?.slug || params.examId,
+            status: exMem?.status || 'published',
+            auth_mode: 'roster',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
+
+        await supabase.from('students').upsert({
+          id: student.id,
+          full_name: student.full_name,
+          email: student.email,
+          roll_number: student.roll_number,
+          login_id: student.login_id,
+          examination_id: params.examId,
+          created_at: student.created_at,
+        });
+
+        await supabase.from('registrations').upsert({
+          id: regId,
+          examination_id: params.examId,
+          student_id: student.id,
+          login_id: cleanRoll,
+          registered_at: registration.registered_at,
+          status: 'registered',
+        });
+      } catch (err) {
+        console.warn('[Supabase registerStudent sync error]', err);
+      }
+    }
+
     return { student, registration, isNew: true };
   },
 
@@ -831,14 +927,21 @@ export const db = {
           if (!error && data && data.length > 0) {
             data.forEach((r: any) => {
               store.registrations.set(r.id, r);
-              if (r.student) store.students.set(r.student.id, r.student);
+              if (r.student) {
+                store.students.set(r.student.id, r.student);
+                if (r.student.roll_number) {
+                  if (!store.studentByRoll) store.studentByRoll = new Map();
+                  store.studentByRoll.set(r.student.roll_number.trim().toUpperCase(), r.student.id);
+                }
+              }
             });
             regs = data as Registration[];
           }
-        } catch {}
+        } catch (err) {
+          console.warn('[Supabase getRegistrationsByExamId error]', err);
+        }
       }
     }
-
 
     return regs.map((r) => ({
       ...r,
@@ -873,8 +976,32 @@ export const db = {
     totalRosterCount: number;
     loginIdentifierLabel: string;
   }> {
-    const exam = store.examinations.get(params.examId);
-    if (!exam) throw new Error('Examination not found');
+    let resolvedExam: Examination | null = store.examinations.get(params.examId) || (await this.getExaminationById(params.examId));
+    if (!resolvedExam) {
+      resolvedExam = {
+        id: params.examId,
+        name: 'Campus Examination',
+        slug: params.examId,
+        description: '',
+        status: 'published',
+        exam_date: new Date().toISOString(),
+        start_time: new Date().toISOString(),
+        registration_deadline: null,
+        student_limit: null,
+        instructions: '',
+        qualification_config: {},
+        show_marks_to_students: true,
+        max_cheating_warnings: 3,
+        auth_mode: 'roster',
+        login_identifier_field: 'roll_number',
+        login_identifier_label: 'Roll Number',
+        roster_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      store.examinations.set(params.examId, resolvedExam);
+    }
+    const exam = resolvedExam;
 
     const authMode = params.authMode || 'roster';
     const loginField = params.loginIdentifierField.trim();
@@ -898,6 +1025,9 @@ export const db = {
     }
 
     let count = 0;
+    const newStudents: Student[] = [];
+    const newRegistrations: Registration[] = [];
+
     for (const row of params.students) {
       const rawLogin = row[loginField];
       if (rawLogin === undefined || rawLogin === null || String(rawLogin).trim() === '') {
@@ -912,7 +1042,6 @@ export const db = {
         (rawEmail && String(rawEmail).trim().toLowerCase()) ||
         `${cleanLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@student.exam`;
 
-      // Extract custom metadata attributes for any other columns
       const attributes: Record<string, string | number | boolean> = {};
       for (const [key, val] of Object.entries(row)) {
         if (key !== loginField && key !== nameField && key !== emailField && val !== null && val !== undefined) {
@@ -932,6 +1061,7 @@ export const db = {
         created_at: new Date().toISOString(),
       };
       store.students.set(studentId, student);
+      newStudents.push(student);
 
       const regId = `reg-${params.examId}-${studentId}`;
       const reg: Registration = {
@@ -944,6 +1074,7 @@ export const db = {
         student,
       };
       store.registrations.set(regId, reg);
+      newRegistrations.push(reg);
       count++;
     }
 
@@ -952,9 +1083,70 @@ export const db = {
     );
     exam.roster_count = currentExamRegs.length;
     store.examinations.set(params.examId, exam);
-
-    // Save atomically to disk
     resilientStorage.scheduleSave(() => store.toSnapshot());
+
+    // Batch upsert to Supabase
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data: exExists } = await supabase.from('examinations').select('id').eq('id', params.examId).maybeSingle();
+        if (!exExists) {
+          await supabase.from('examinations').upsert({
+            id: params.examId,
+            name: exam.name || 'Campus Examination',
+            slug: exam.slug || params.examId,
+            status: exam.status || 'published',
+            auth_mode: authMode,
+            login_identifier_field: loginField,
+            login_identifier_label: loginLabel,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
+
+        if (params.replaceExisting) {
+          await supabase.from('registrations').delete().eq('examination_id', params.examId);
+        }
+
+        const chunkSize = 50;
+        for (let i = 0; i < newStudents.length; i += chunkSize) {
+          await supabase.from('students').upsert(
+            newStudents.slice(i, i + chunkSize).map((s) => ({
+              id: s.id,
+              full_name: s.full_name,
+              email: s.email,
+              roll_number: s.roll_number,
+              login_id: s.login_id,
+              examination_id: s.examination_id,
+              created_at: s.created_at,
+            }))
+          );
+        }
+
+        for (let i = 0; i < newRegistrations.length; i += chunkSize) {
+          await supabase.from('registrations').upsert(
+            newRegistrations.slice(i, i + chunkSize).map((r) => ({
+              id: r.id,
+              examination_id: r.examination_id,
+              student_id: r.student_id,
+              login_id: r.login_id,
+              registered_at: r.registered_at,
+              status: r.status,
+            }))
+          );
+        }
+
+        await supabase.from('examinations').update({
+          auth_mode: authMode,
+          login_identifier_field: loginField,
+          login_identifier_label: loginLabel,
+          roster_count: currentExamRegs.length,
+          updated_at: new Date().toISOString(),
+        }).eq('id', params.examId);
+      } catch (err) {
+        console.warn('[Supabase importStudentRoster sync error]', err);
+      }
+    }
 
     return {
       importedCount: count,
@@ -978,7 +1170,7 @@ export const db = {
 
     let exam: Examination | null | undefined = store.examinations.get(rawId);
     if (!exam) {
-      exam = Array.from(store.examinations.values()).find((e) => e.slug === rawId);
+      exam = Array.from(store.examinations.values()).find((e) => e.slug === rawId || e.id === rawId);
     }
     if (!exam) {
       exam = (await this.getExaminationById(rawId)) || (await this.getExaminationBySlug(rawId));
@@ -987,26 +1179,13 @@ export const db = {
       return { verified: false, error: 'Examination not found.' };
     }
 
-    // Look for student in this exam's registrations
-    let examRegs = Array.from(store.registrations.values()).filter(
-      (r) => r.examination_id === exam!.id
-    );
-
-    if (examRegs.length === 0) {
-      const snap = resilientStorage.loadSnapshot();
-      if (snap && snap.registrations) {
-        store.hydrate(snap);
-        examRegs = Array.from(store.registrations.values()).filter(
-          (r) => r.examination_id === exam!.id
-        );
-      }
-    }
+    let examRegs = await this.getRegistrationsByExamId(exam.id);
 
     let match = examRegs.find((r) => {
       const regLogin = r.login_id?.trim().toLowerCase();
       if (regLogin && regLogin === cleanLogin.toLowerCase()) return true;
 
-      const st = store.students.get(r.student_id);
+      const st = store.students.get(r.student_id) || r.student;
       if (!st) return false;
       return (
         st.login_id?.trim().toLowerCase() === cleanLogin.toLowerCase() ||
@@ -1015,8 +1194,6 @@ export const db = {
       );
     });
 
-    // Real Exam Guarantee: If candidate entered their roll number/login ID, admit and auto-register
-    // so no student is ever blocked on cold serverless restarts
     if (!match) {
       const autoReg = await this.registerStudent({
         examId: exam.id,
@@ -1042,7 +1219,7 @@ export const db = {
     loginIdentifierField?: string;
     loginIdentifierLabel?: string;
   }): Promise<Examination | null> {
-    const exam = store.examinations.get(params.examId);
+    const exam = store.examinations.get(params.examId) || (await this.getExaminationById(params.examId));
     if (!exam) return null;
 
     exam.auth_mode = params.authMode;
@@ -1052,6 +1229,21 @@ export const db = {
 
     store.examinations.set(params.examId, exam);
     resilientStorage.scheduleSave(() => store.toSnapshot());
+
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        await supabase.from('examinations').update({
+          auth_mode: params.authMode,
+          login_identifier_field: params.loginIdentifierField || exam.login_identifier_field,
+          login_identifier_label: params.loginIdentifierLabel || exam.login_identifier_label,
+          updated_at: new Date().toISOString(),
+        }).eq('id', params.examId);
+      } catch (err) {
+        console.warn('[Supabase updateExamAuthSettings error]', err);
+      }
+    }
+
     return exam;
   },
 
@@ -1070,6 +1262,17 @@ export const db = {
       store.examinations.set(examId, exam);
     }
     resilientStorage.scheduleSave(() => store.toSnapshot());
+
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        await supabase.from('registrations').delete().eq('examination_id', examId);
+        await supabase.from('examinations').update({ roster_count: 0 }).eq('id', examId);
+      } catch (err) {
+        console.warn('[Supabase clearStudentRoster sync error]', err);
+      }
+    }
+
     return true;
   },
 
@@ -1483,6 +1686,62 @@ export const db = {
       }
     }
 
+    if (questions.length === 0) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('questions')
+            .select('*, options:question_options(*), answer_key:answer_keys(*)')
+            .eq('round_id', roundId)
+            .order('sort_order', { ascending: true });
+
+          if (!error && data && data.length > 0) {
+            data.forEach((q: any) => {
+              const options = (q.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order);
+              const qObj: Question = {
+                id: q.id,
+                bank_id: q.bank_id,
+                round_id: q.round_id,
+                question_text: q.question_text,
+                question_type: q.question_type,
+                difficulty: q.difficulty,
+                marks: Number(q.marks),
+                negative_marks: Number(q.negative_marks),
+                status: q.status,
+                ocr_confidence: q.ocr_confidence,
+                image_url: q.image_url,
+                explanation: q.explanation,
+                sort_order: q.sort_order,
+                created_at: q.created_at,
+                updated_at: q.updated_at,
+                options,
+              };
+              store.questions.set(q.id, qObj);
+              if (q.answer_key) {
+                const ak = Array.isArray(q.answer_key) ? q.answer_key[0] : q.answer_key;
+                if (ak) {
+                  store.answerKeys.set(q.id, {
+                    id: ak.id || `ak-${q.id}`,
+                    question_id: q.id,
+                    correct_option_label: ak.correct_option_label || 'A',
+                    created_at: ak.created_at,
+                    updated_at: ak.updated_at,
+                  });
+                }
+              }
+            });
+
+            questions = Array.from(store.questions.values())
+              .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
+              .sort((a, b) => a.sort_order - b.sort_order);
+          }
+        } catch (err) {
+          console.warn('[Supabase getQuestionsByRoundId error]', err);
+        }
+      }
+    }
+
     if (isAdmin) {
       return questions.map((q) => {
         const ak = store.answerKeys.get(q.id);
@@ -1508,6 +1767,88 @@ export const db = {
         correct_option_label: ak?.correct_option_label,
       };
     });
+  },
+
+  async syncRoundQuestionsToSupabase(roundId: string): Promise<void> {
+    const roundQuestions = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
+    if (roundQuestions.length === 0) return;
+
+    const supabase = createAdminClient();
+    if (!supabase) return;
+
+    try {
+      const { data: roundInDb } = await supabase.from('examination_rounds').select('id, examination_id').eq('id', roundId).maybeSingle();
+      if (!roundInDb) {
+        const round = store.rounds.get(roundId) || (await this.getRoundById(roundId));
+        if (round) {
+          const { data: examInDb } = await supabase.from('examinations').select('id').eq('id', round.examination_id).maybeSingle();
+          if (!examInDb) {
+            await supabase.from('examinations').upsert({
+              id: round.examination_id,
+              name: 'Campus Examination',
+              slug: round.examination_id,
+              status: 'published',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+          }
+          await supabase.from('examination_rounds').upsert(round);
+        }
+      }
+
+      const qRows = roundQuestions.map((q) => ({
+        id: q.id,
+        round_id: q.round_id,
+        question_text: q.question_text,
+        question_type: q.question_type,
+        difficulty: q.difficulty,
+        marks: q.marks,
+        negative_marks: q.negative_marks,
+        status: q.status,
+        ocr_confidence: q.ocr_confidence ?? 95,
+        explanation: q.explanation || null,
+        sort_order: q.sort_order,
+        created_at: q.created_at,
+        updated_at: q.updated_at,
+      }));
+
+      const optRows = roundQuestions.flatMap((q) =>
+        (q.options || []).map((opt) => ({
+          id: opt.id,
+          question_id: q.id,
+          label: opt.label,
+          option_text: opt.option_text,
+          sort_order: opt.sort_order,
+          created_at: opt.created_at || new Date().toISOString(),
+        }))
+      );
+
+      const akRows = roundQuestions.map((q) => ({
+        id: `ak-${q.id}`,
+        question_id: q.id,
+        correct_option_label: store.answerKeys.get(q.id)?.correct_option_label || 'A',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }));
+
+      const chunkSize = 50;
+      for (let i = 0; i < qRows.length; i += chunkSize) {
+        await supabase.from('questions').upsert(qRows.slice(i, i + chunkSize));
+      }
+      for (let i = 0; i < optRows.length; i += chunkSize) {
+        await supabase.from('question_options').upsert(optRows.slice(i, i + chunkSize));
+      }
+      for (let i = 0; i < akRows.length; i += chunkSize) {
+        await supabase.from('answer_keys').upsert(akRows.slice(i, i + chunkSize));
+      }
+
+      await supabase
+        .from('examination_rounds')
+        .update({ question_pool_count: roundQuestions.length, updated_at: new Date().toISOString() })
+        .eq('id', roundId);
+    } catch (err) {
+      console.warn('[Supabase syncRoundQuestionsToSupabase error]', err);
+    }
   },
 
   async createQuestion(questionData: Partial<Question> & { correct_option_label?: string }): Promise<Question> {
@@ -1543,12 +1884,64 @@ export const db = {
     }
 
     resilientStorage.scheduleSave(() => store.toSnapshot());
+
+    // Sync to Supabase
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        await supabase.from('questions').upsert({
+          id: newQuestion.id,
+          round_id: newQuestion.round_id,
+          question_text: newQuestion.question_text,
+          question_type: newQuestion.question_type,
+          difficulty: newQuestion.difficulty,
+          marks: newQuestion.marks,
+          negative_marks: newQuestion.negative_marks,
+          status: newQuestion.status,
+          sort_order: newQuestion.sort_order,
+          created_at: newQuestion.created_at,
+          updated_at: newQuestion.updated_at,
+        });
+
+        if (newQuestion.options && newQuestion.options.length > 0) {
+          await supabase.from('question_options').upsert(
+            newQuestion.options.map((opt) => ({
+              id: opt.id,
+              question_id: newQuestion.id,
+              label: opt.label,
+              option_text: opt.option_text,
+              sort_order: opt.sort_order,
+              created_at: opt.created_at || new Date().toISOString(),
+            }))
+          );
+        }
+
+        if (questionData.correct_option_label) {
+          await supabase.from('answer_keys').upsert({
+            id: `ak-${id}`,
+            question_id: id,
+            correct_option_label: questionData.correct_option_label,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        console.warn('[Supabase createQuestion sync error]', err);
+      }
+    }
+
     return { ...newQuestion, correct_option_label: questionData.correct_option_label };
   },
 
   async deleteQuestion(id: string): Promise<boolean> {
     store.questions.delete(id);
     store.answerKeys.delete(id);
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        await supabase.from('questions').delete().eq('id', id);
+      } catch {}
+    }
     resilientStorage.scheduleSave(() => store.toSnapshot());
     return true;
   },
@@ -2333,6 +2726,7 @@ export const db = {
       }
 
       resilientStorage.flushSync(() => store.toSnapshot());
+      await this.syncRoundQuestionsToSupabase(roundId);
       return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
     }
 
@@ -2398,6 +2792,7 @@ export const db = {
       }
 
       resilientStorage.flushSync(() => store.toSnapshot());
+      await this.syncRoundQuestionsToSupabase(roundId);
       return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
     }
 
@@ -2483,6 +2878,7 @@ export const db = {
     }
 
     resilientStorage.flushSync(() => store.toSnapshot());
+    await this.syncRoundQuestionsToSupabase(roundId);
     return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
   },
 
@@ -2602,6 +2998,9 @@ export const db = {
       job.completed_at = new Date().toISOString();
       store.ocrJobs.set(id, { ...job });
       resilientStorage.flushSync(() => store.toSnapshot());
+      if (params.roundId) {
+        await this.syncRoundQuestionsToSupabase(params.roundId);
+      }
     }
 
     return job;
