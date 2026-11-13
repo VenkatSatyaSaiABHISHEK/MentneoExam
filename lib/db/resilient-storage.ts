@@ -19,8 +19,10 @@ export interface ResilientSnapshot {
   ocrJobs: Record<string, any>;
 }
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'exam_data') : path.join(process.cwd(), 'data');
 const FILE_PATH = path.join(DATA_DIR, 'exams_resilient_store.json');
+const BUNDLED_FILE_PATH = path.join(process.cwd(), 'data', 'exams_resilient_store.json');
 const TMP_FILE_PATH = path.join(DATA_DIR, 'exams_resilient_store.json.tmp');
 const WAL_FILE_PATH = path.join(DATA_DIR, 'answers_delta.wal.jsonl');
 
@@ -50,9 +52,13 @@ class ResilientStorageEngine {
   public loadSnapshot(): ResilientSnapshot | null {
     try {
       let snapshot: ResilientSnapshot | null = null;
+      let targetFile = FILE_PATH;
+      if (!fs.existsSync(FILE_PATH) && fs.existsSync(BUNDLED_FILE_PATH)) {
+        targetFile = BUNDLED_FILE_PATH;
+      }
 
-      if (fs.existsSync(FILE_PATH)) {
-        const raw = fs.readFileSync(FILE_PATH, 'utf-8');
+      if (fs.existsSync(targetFile)) {
+        const raw = fs.readFileSync(targetFile, 'utf-8');
         if (raw && raw.trim().length > 0) {
           snapshot = JSON.parse(raw) as ResilientSnapshot;
           this.lastSavedTime = snapshot.lastUpdated || null;
