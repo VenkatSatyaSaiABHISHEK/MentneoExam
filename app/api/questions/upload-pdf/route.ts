@@ -25,10 +25,12 @@ export async function POST(req: Request) {
     });
 
     const questions = (job as any).questions || (roundId ? await db.getQuestionsByRoundId(roundId, true) : []);
+    const activePdf = roundId ? await db.getActivePdfForRound(roundId) : null;
 
     return NextResponse.json({
       success: true,
       data: job,
+      activePdf,
       questions,
       message: `Question PDF uploaded. ${job.questions_extracted || targetCount} questions extracted and added to round question bank.`,
     });
@@ -38,9 +40,12 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url);
+    const roundId = searchParams.get('roundId') || undefined;
     const jobs = await db.getOCRJobs();
+    const activePdf = roundId ? await db.getActivePdfForRound(roundId) : null;
 
     // Check bound OCR service health if configured (bypass localhost in cloud/serverless)
     let ocrServiceStatus = 'not_configured';
@@ -65,6 +70,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       data: jobs,
+      activePdf,
       ocrService: {
         status: ocrServiceStatus,
         configured: Boolean(process.env.OCR_SERVICE_URL),

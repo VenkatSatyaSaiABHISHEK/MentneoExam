@@ -2049,15 +2049,12 @@ export const db = {
     };
 
     // Question pool for this round (accept approved or unassigned status)
-    let pool = Array.from(store.questions.values()).filter(
-      (q) => q.round_id === params.roundId && (q.status === 'approved' || !q.status)
-    );
+    let pool = await this.getQuestionsByRoundId(params.roundId);
+    pool = pool.filter((q) => q.status === 'approved' || !q.status);
 
-    // Resilient serverless fallback: if lambda memory is cold/empty, auto-populate from bank immediately
     if (pool.length === 0) {
-      await this.populateRoundQuestionPool(params.roundId, Math.max(round.total_questions * 2, 50));
-      pool = Array.from(store.questions.values()).filter(
-        (q) => q.round_id === params.roundId && (q.status === 'approved' || !q.status)
+      throw new Error(
+        `Round ${round.round_number} (${round.name}) has no questions in its pool yet. Please upload a question paper PDF first.`
       );
     }
 
@@ -2941,6 +2938,54 @@ export const db = {
     return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
   },
 
+  async getActivePdfForRound(roundId: string): Promise<{
+    id: string;
+    original_filename: string;
+    uploaded_at: string;
+    file_size_bytes: number;
+    questions_count: number;
+  } | null> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from('pdf_documents')
+          .select('*')
+          .eq('round_id', roundId)
+          .order('uploaded_at', { ascending: false })
+          .limit(1);
+        if (data && data.length > 0) {
+          const doc = data[0];
+          const pool = await this.getQuestionsByRoundId(roundId);
+          return {
+            id: doc.id,
+            original_filename: doc.original_filename,
+            uploaded_at: doc.uploaded_at,
+            file_size_bytes: doc.file_size_bytes || 0,
+            questions_count: pool.length,
+          };
+        }
+      } catch {}
+    }
+
+    // Fall back to ocrJobs
+    const jobs = Array.from(store.ocrJobs.values()).filter(
+      (j) => j.round_name?.includes(roundId) || j.pdf_document_id?.includes(roundId)
+    );
+    if (jobs.length > 0) {
+      const latest = jobs[0];
+      const pool = await this.getQuestionsByRoundId(roundId);
+      return {
+        id: latest.id,
+        original_filename: latest.document_name || 'Question_Paper.pdf',
+        uploaded_at: latest.created_at,
+        file_size_bytes: 0,
+        questions_count: pool.length || latest.questions_extracted || 0,
+      };
+    }
+    return null;
+  },
+
   // OCR JOBS
   async getOCRJobs(): Promise<OCRJob[]> {
     const supabase = createAdminClient();
@@ -3081,8 +3126,19 @@ export const db = {
       const supabase = createAdminClient();
       if (supabase) {
         try {
+          if (params.roundId) {
+            await supabase.from('pdf_documents').upsert({
+              id: job.pdf_document_id,
+              round_id: params.roundId,
+              storage_path: `documents/${params.documentName}`,
+              original_filename: params.documentName,
+              file_size_bytes: params.fileBuffer?.length || 0,
+              uploaded_at: new Date().toISOString(),
+            });
+          }
           await supabase.from('ocr_jobs').upsert({
             id: job.id,
+            pdf_document_id: job.pdf_document_id,
             status: job.status,
             progress_percent: job.progress_percent,
             questions_extracted: job.questions_extracted,
@@ -3090,7 +3146,9 @@ export const db = {
             completed_at: job.completed_at,
             created_at: job.created_at,
           });
-        } catch {}
+        } catch (err) {
+          console.warn('[Supabase pdf_documents/ocr_jobs upsert error]', err);
+        }
       }
     }
 

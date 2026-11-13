@@ -48,6 +48,7 @@ function RoundQuestionsContent() {
   const [questions, setQuestions] = React.useState<Question[]>([]);
   const [ocrJobs, setOcrJobs] = React.useState<OCRJob[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [activePdf, setActivePdf] = React.useState<any>(null);
   const [search, setSearch] = React.useState('');
   const [difficultyFilter, setDifficultyFilter] = React.useState('all');
 
@@ -305,15 +306,19 @@ function RoundQuestionsContent() {
         } catch {}
       }
 
-      // 3. Fetch OCR jobs
-      const ocrRes = await fetch('/api/questions/upload-pdf');
+      // 3. Fetch OCR jobs and active question paper PDF
+      const ocrRes = await fetch(`/api/questions/upload-pdf?roundId=${roundId}`);
       const ocrJson = await ocrRes.json();
-      if (ocrJson.success && ocrJson.data) {
-        // Filter jobs matching this round or document
-        const jobs = (ocrJson.data as OCRJob[]).filter(
-          (j) => j.round_name?.includes(`Round ${resolvedRound?.round_number}`) || j.pdf_document_id?.includes(roundId)
-        );
-        setOcrJobs(jobs.length > 0 ? jobs : ocrJson.data);
+      if (ocrJson.success) {
+        if (ocrJson.activePdf) {
+          setActivePdf(ocrJson.activePdf);
+        }
+        if (ocrJson.data) {
+          const jobs = (ocrJson.data as OCRJob[]).filter(
+            (j) => j.round_name?.includes(`Round ${resolvedRound?.round_number}`) || j.pdf_document_id?.includes(roundId)
+          );
+          setOcrJobs(jobs.length > 0 ? jobs : ocrJson.data);
+        }
       }
     } catch {
       toast.error('Failed to load round question bank.');
@@ -376,6 +381,10 @@ function RoundQuestionsContent() {
             }
           } catch {}
         }
+      }
+
+      if (data.activePdf) {
+        setActivePdf(data.activePdf);
       }
 
       const extracted = data.questions?.length || data.data?.questions_extracted || 100;
@@ -722,6 +731,59 @@ function RoundQuestionsContent() {
           </div>
         </div>
 
+        {/* Active Question Paper PDF Card */}
+        {activePdf ? (
+          <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/70 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-gray-900">{activePdf.original_filename}</span>
+                  <Badge variant="success" size="sm" className="text-[10px] uppercase font-bold tracking-wider">
+                    Active In Round {round?.round_number}
+                  </Badge>
+                </div>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Uploaded Question Paper • <strong>{questions.length} questions</strong> running for candidate exams
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setUploadModalOpen(true)}
+                className="text-xs font-semibold gap-1.5 border-blue-300 text-blue-700 hover:bg-blue-100"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Replace Question Paper PDF</span>
+              </Button>
+            </div>
+          </div>
+        ) : questions.length === 0 ? (
+          <div className="p-6 rounded-xl border border-dashed border-gray-300 bg-white text-center flex flex-col items-center justify-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+              <FileText className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-gray-900">No Question Paper PDF Uploaded Yet</h3>
+              <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+                Upload your question paper PDF for Round {round?.round_number || 1}. The extracted questions will appear here so you can verify exactly which questions are running.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setUploadModalOpen(true)}
+              className="text-xs font-semibold gap-1.5 bg-gray-900 text-white hover:bg-black"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Upload Question Paper PDF for Round {round?.round_number || 1}</span>
+            </Button>
+          </div>
+        ) : null}
+
         {/* Random Sampling Notice */}
         {isSamplingActive ? (
           <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-xs text-emerald-900 flex items-center gap-3">
@@ -873,6 +935,12 @@ function RoundQuestionsContent() {
                           <Badge variant={q.difficulty === 'hard' ? 'danger' : q.difficulty === 'medium' ? 'warning' : 'neutral'} size="sm">
                             {q.difficulty}
                           </Badge>
+                          {activePdf && (
+                            <span className="px-2 py-0.5 rounded-sm bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold flex items-center gap-1">
+                              <FileText className="w-2.5 h-2.5" />
+                              <span>Source: {activePdf.original_filename}</span>
+                            </span>
+                          )}
                           <span className="text-[11px] text-gray-400 font-mono">
                             +{q.marks} pts {q.negative_marks ? `/ -${q.negative_marks} pts` : ''}
                           </span>
