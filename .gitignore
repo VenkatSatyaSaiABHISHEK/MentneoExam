@@ -37,6 +37,7 @@ yarn-error.log*
 # runtime database stores
 data/*.wal.jsonl
 data/*.tmp
+supabase/.temp/
 
 # vercel
 .vercel
