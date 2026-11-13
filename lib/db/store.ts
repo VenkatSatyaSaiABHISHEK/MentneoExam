@@ -19,6 +19,7 @@ import {
 } from '@/types';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resilientStorage, ResilientSnapshot } from '@/lib/db/resilient-storage';
+import { processPdfQuestions, APTITUDE_REASONING_BANK } from '@/lib/pdf/extractor';
 
 // In-memory high-throughput state engine with resilient disk backup and Supabase sync
 class StateStore {
@@ -702,7 +703,7 @@ export const db = {
     if (id && (id.startsWith('exam-') || id.length > 5)) {
       const synthesized: Examination = {
         id,
-        name: 'Computer Science & Engineering Assessment',
+        name: 'Campus Recruitment Drive Mentneo',
         slug: id,
         description: 'Comprehensive multi-round candidate assessment.',
         status: 'published',
@@ -724,12 +725,12 @@ export const db = {
           id: `round-${id}-1`,
           examination_id: id,
           round_number: 1,
-          name: 'Screening & Core Fundamentals',
-          duration_minutes: 40,
+          name: 'Round 1: Basic Aptitude And Reasoning',
+          duration_minutes: 15,
           total_questions: 30,
           marks_per_question: 1,
           negative_marks: 0,
-          qualifying_marks: 10,
+          qualifying_marks: 15,
           total_marks: 30,
           question_selection_strategy: 'random',
           scheduled_start: null,
@@ -968,31 +969,39 @@ export const db = {
       .filter((r) => r.examination_id === examId)
       .sort((a, b) => a.round_number - b.round_number);
 
-    if (rounds.length > 0) {
-      return rounds;
-    }
-
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('examination_rounds')
-          .select('*')
-          .eq('examination_id', examId)
-          .order('round_number', { ascending: true });
-        if (!error && data) return data as ExaminationRound[];
-      } catch {
-        // Fall back to store
-      }
-    }
-
-    if (rounds.length === 0 && store.rounds.size === 0) {
+    if (rounds.length === 0) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.rounds) {
         store.hydrate(snap);
         rounds = Array.from(store.rounds.values())
           .filter((r) => r.examination_id === examId)
           .sort((a, b) => a.round_number - b.round_number);
+      }
+    }
+
+    if (rounds.length === 0) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('examination_rounds')
+            .select('*')
+            .eq('examination_id', examId)
+            .order('round_number', { ascending: true });
+          if (!error && data && data.length > 0) {
+            rounds = data as ExaminationRound[];
+            rounds.forEach((r) => store.rounds.set(r.id, r));
+          }
+        } catch {
+          // Fall back to store
+        }
+      }
+    }
+
+    if (rounds.length === 0 && examId) {
+      const exam = await this.getExaminationById(examId);
+      if (exam && exam.rounds && exam.rounds.length > 0) {
+        rounds = exam.rounds;
       }
     }
 
@@ -1038,12 +1047,12 @@ export const db = {
         id: roundId,
         examination_id: examId,
         round_number: num,
-        name: num === 1 ? 'Screening & Core Fundamentals' : num === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture',
-        duration_minutes: num === 1 ? 40 : num === 2 ? 45 : 60,
+        name: num === 1 ? 'Round 1: Basic Aptitude And Reasoning' : num === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture',
+        duration_minutes: num === 1 ? 15 : num === 2 ? 45 : 60,
         total_questions: num === 1 ? 30 : 5,
         marks_per_question: num === 1 ? 1 : num === 2 ? 3 : 4,
         negative_marks: num === 1 ? 0 : num === 2 ? 1 : 1,
-        qualifying_marks: num === 1 ? 10 : num === 2 ? 8 : 12,
+        qualifying_marks: num === 1 ? 15 : num === 2 ? 8 : 12,
         total_marks: num === 1 ? 30 : num === 2 ? 15 : 20,
         question_selection_strategy: 'random',
         scheduled_start: null,
@@ -1853,9 +1862,19 @@ export const db = {
 
   // QUESTIONS & ATTEMPTS
   async getQuestionsByRoundId(roundId: string, isAdmin = false): Promise<Question[]> {
-    const questions = Array.from(store.questions.values())
+    let questions = Array.from(store.questions.values())
       .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
       .sort((a, b) => a.sort_order - b.sort_order);
+
+    if (questions.length === 0) {
+      const snap = resilientStorage.loadSnapshot();
+      if (snap && snap.questions) {
+        store.hydrate(snap);
+        questions = Array.from(store.questions.values())
+          .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
+          .sort((a, b) => a.sort_order - b.sort_order);
+      }
+    }
 
     if (isAdmin) {
       return questions.map((q) => {
@@ -2607,6 +2626,62 @@ export const db = {
       throw new Error(`Round ${roundId} could not be resolved`);
     }
 
+    const isAptitude =
+      round.name.toLowerCase().includes('aptitude') ||
+      round.name.toLowerCase().includes('reasoning') ||
+      round.name.toLowerCase().includes('basic') ||
+      round.round_number === 1;
+
+    if (isAptitude) {
+      const existing = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
+      const needed = Math.max(0, count - existing.length);
+      const toCreate = needed > 0 ? needed : count;
+
+      for (let i = 1; i <= toCreate; i++) {
+        const qNum = existing.length + i;
+        const qId = `q-${roundId}-${String(qNum).padStart(3, '0')}`;
+        const item = APTITUDE_REASONING_BANK[(qNum - 1) % APTITUDE_REASONING_BANK.length];
+        const cycle = Math.floor((qNum - 1) / APTITUDE_REASONING_BANK.length);
+        const text = cycle > 0 ? `[Set ${cycle + 1}] ${item.question_text}` : item.question_text;
+
+        const options: QuestionOption[] = item.options.map((optText, optIdx) => ({
+          id: `opt-${qId}-${String.fromCharCode(65 + optIdx).toLowerCase()}`,
+          question_id: qId,
+          label: String.fromCharCode(65 + optIdx) as 'A' | 'B' | 'C' | 'D',
+          option_text: optText,
+          sort_order: optIdx + 1,
+          created_at: new Date().toISOString(),
+        }));
+
+        const qObj: Question = {
+          id: qId,
+          round_id: roundId,
+          question_text: text,
+          question_type: 'single_choice',
+          difficulty: item.difficulty || 'medium',
+          marks: round.marks_per_question ?? 1,
+          negative_marks: round.negative_marks ?? 0,
+          status: 'approved',
+          sort_order: qNum,
+          options,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        store.questions.set(qId, qObj);
+        store.answerKeys.set(qId, {
+          id: `ak-${qId}`,
+          question_id: qId,
+          correct_option_label: item.correct_answer || 'A',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      resilientStorage.flushSync(() => store.toSnapshot());
+      return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
+    }
+
     const coreFundamentalsTopics = [
       { q: "Which asymptotic time complexity represents an algorithm that halves the input problem size at every recursive step?", opts: ["O(log N)", "O(N)", "O(N log N)", "O(N^2)"], ans: "A", diff: "easy" },
       { q: "In relational database design, which normal form ensures that all non-key attributes depend entirely on the primary key?", opts: ["First Normal Form (1NF)", "Second Normal Form (2NF)", "Third Normal Form (3NF)", "Boyce-Codd Normal Form (BCNF)"], ans: "B", diff: "medium" },
@@ -2699,7 +2774,12 @@ export const db = {
     );
   },
 
-  async createOCRJob(params: { documentName: string; roundId?: string; targetCount?: number }): Promise<OCRJob> {
+  async createOCRJob(params: {
+    documentName: string;
+    roundId?: string;
+    targetCount?: number;
+    fileBuffer?: Buffer;
+  }): Promise<OCRJob> {
     const id = `job-ocr-${Date.now()}`;
     const round = params.roundId ? await this.getRoundById(params.roundId) : null;
     const countToExtract = params.targetCount || 100;
@@ -2767,10 +2847,32 @@ export const db = {
       let extractedCount = countToExtract;
       if (params.roundId) {
         try {
-          extractedCount = await this.populateRoundQuestionPool(params.roundId, countToExtract);
+          const marks = round?.marks_per_question ?? 1;
+          const neg = round?.negative_marks ?? 0;
+          const { questions, answerKeys } = processPdfQuestions(
+            params.fileBuffer || null,
+            params.documentName,
+            params.roundId,
+            countToExtract,
+            marks,
+            neg
+          );
+
+          questions.forEach((q) => store.questions.set(q.id, q));
+          Object.entries(answerKeys).forEach(([qId, label]) => {
+            store.answerKeys.set(qId, {
+              id: `ak-${qId}`,
+              question_id: qId,
+              correct_option_label: label,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+          });
+
+          extractedCount = questions.length;
         } catch (popErr) {
-          console.warn('[OCR Engine] Error populating questions:', popErr);
-          extractedCount = countToExtract;
+          console.warn('[OCR Engine] Error processing PDF questions:', popErr);
+          extractedCount = await this.populateRoundQuestionPool(params.roundId, countToExtract);
         }
       }
       job.status = 'completed';

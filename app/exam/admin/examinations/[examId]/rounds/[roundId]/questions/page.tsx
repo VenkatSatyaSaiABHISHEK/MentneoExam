@@ -164,53 +164,60 @@ function RoundQuestionsContent() {
   const fetchRoundData = async () => {
     try {
       setLoading(true);
+
+      // 0. Read user's local configured settings from browser local storage
+      let localExam: any = null;
+      let localR: any = null;
+      const roundNumMatch = roundId.match(/(\d+)$/);
+      const inferredNum = roundNumMatch ? Number(roundNumMatch[1]) : 1;
+
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+          if (stored) {
+            localExam = JSON.parse(stored);
+            if (localExam?.rounds) {
+              localR = localExam.rounds.find(
+                (r: any) => r.id === roundId || Number(r.round_number) === Number(inferredNum)
+              );
+            }
+          }
+        } catch {}
+      }
+
       // 1. Fetch exam & round
       let resolvedRound: ExaminationRound | null = null;
       try {
         const examRes = await fetch(`/api/examinations/${examId}`);
         const examJson = await examRes.json();
         if (examJson.success && examJson.data) {
-          setExam(examJson.data);
+          const mergedExam = localExam ? { ...examJson.data, name: localExam.name || examJson.data.name } : examJson.data;
+          setExam(mergedExam);
           const currentR = (examJson.data.rounds || []).find((r: ExaminationRound) => r.id === roundId);
           if (currentR) {
-            resolvedRound = currentR;
+            resolvedRound = localR ? { ...currentR, ...localR } : currentR;
           }
         }
       } catch (err) {
         console.warn('Failed to fetch exam:', err);
       }
 
+      if (localExam && (!resolvedRound || !resolvedRound.name)) {
+        if (!exam) setExam(localExam);
+      }
+
       // If round could not be matched from exam, check localStorage or synthesize resilient round object
       if (!resolvedRound) {
-        const roundNumMatch = roundId.match(/(\d+)$/);
-        const inferredNum = roundNumMatch ? Number(roundNumMatch[1]) : 1;
-
-        // Try reading user's configured settings from browser local storage
-        let localR: any = null;
-        if (typeof window !== 'undefined') {
-          try {
-            const stored = localStorage.getItem(`mentneo_exam_${examId}`);
-            if (stored) {
-              const parsed = JSON.parse(stored);
-              if (parsed?.rounds) {
-                localR = parsed.rounds.find(
-                  (r: any) => r.id === roundId || Number(r.round_number) === Number(inferredNum)
-                );
-              }
-            }
-          } catch {}
-        }
-
         resolvedRound = {
           id: roundId,
           examination_id: examId,
           round_number: inferredNum,
-          name: localR?.name || (inferredNum === 1 ? 'Screening & Core Fundamentals' : inferredNum === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture'),
-          duration_minutes: localR?.duration_minutes ?? (inferredNum === 1 ? 40 : inferredNum === 2 ? 45 : 60),
+          name: localR?.name || (inferredNum === 1 ? 'Round 1: Basic Aptitude And Reasoning' : inferredNum === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture'),
+          duration_minutes: localR?.duration_minutes ?? (inferredNum === 1 ? 15 : inferredNum === 2 ? 45 : 60),
           total_questions: localR?.total_questions ?? (inferredNum === 1 ? 30 : 5),
           marks_per_question: localR?.marks_per_question ?? (inferredNum === 1 ? 1 : inferredNum === 2 ? 3 : 4),
           negative_marks: localR?.negative_marks ?? 0,
-          qualifying_marks: localR?.qualifying_marks ?? (inferredNum === 1 ? 10 : 8),
+          qualifying_marks: localR?.qualifying_marks ?? (inferredNum === 1 ? 15 : 8),
           total_marks: (localR?.total_questions ?? 30) * (localR?.marks_per_question ?? 1),
           question_selection_strategy: localR?.question_selection_strategy || 'random',
           scheduled_start: localR?.scheduled_start || null,
@@ -229,25 +236,25 @@ function RoundQuestionsContent() {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
+      }
 
-        // Sync local settings to server store so serverless state aligns with user's choices
-        if (localR) {
-          fetch(`/api/examinations/${examId}/rounds`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(resolvedRound),
-          }).catch(() => {});
-        }
+      // Sync local settings to server store so serverless state aligns with user's choices
+      if (localR || resolvedRound) {
+        fetch(`/api/examinations/${examId}/rounds`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(resolvedRound),
+        }).catch(() => {});
       }
 
       setRound(resolvedRound);
       setQMarks(resolvedRound.marks_per_question ?? 1);
       setQNegativeMarks(resolvedRound.negative_marks ?? 0);
-      setRoundDuration(resolvedRound.duration_minutes ?? 40);
+      setRoundDuration(resolvedRound.duration_minutes ?? 15);
       setRoundTotalQuestions(resolvedRound.total_questions ?? 30);
       setRoundMarksPerQ(resolvedRound.marks_per_question ?? 1);
       setRoundNegativeMarks(resolvedRound.negative_marks ?? 0);
-      setRoundQualifyingMarks(resolvedRound.qualifying_marks ?? 10);
+      setRoundQualifyingMarks(resolvedRound.qualifying_marks ?? 15);
 
       // 2. Fetch questions strictly belonging to this round
       const qRes = await fetch(`/api/questions?roundId=${roundId}&isAdmin=true`);

@@ -11,10 +11,17 @@ export async function POST(req: Request) {
 
     const targetCount = Number(formData.get('count')) || 100;
 
+    let fileBuffer: Buffer | undefined = undefined;
+    if (file) {
+      const arrayBuffer = await file.arrayBuffer();
+      fileBuffer = Buffer.from(arrayBuffer);
+    }
+
     const job = await db.createOCRJob({
       documentName,
       roundId,
       targetCount,
+      fileBuffer,
     });
 
     return NextResponse.json({

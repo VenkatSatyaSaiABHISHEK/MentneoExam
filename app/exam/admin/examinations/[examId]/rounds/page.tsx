@@ -53,16 +53,60 @@ function AdminRoundsConfigContent() {
   const fetchRounds = async () => {
     try {
       setLoading(true);
+
+      // Check localStorage for user-configured exam and rounds data
+      let localExam: any = null;
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+          if (stored) {
+            localExam = JSON.parse(stored);
+          }
+        } catch {}
+      }
+
       const res = await fetch(`/api/examinations/${examId}/rounds`);
       const json = await res.json();
-      if (json.success && json.data) {
-        setRounds(json.data);
+      let roundsList: ExaminationRound[] = [];
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        roundsList = json.data;
+      } else if (localExam?.rounds && Array.isArray(localExam.rounds) && localExam.rounds.length > 0) {
+        roundsList = localExam.rounds;
       }
+
+      // Enrich with local storage customizations if present
+      if (localExam?.rounds && Array.isArray(localExam.rounds)) {
+        roundsList = roundsList.map((r) => {
+          const matched = localExam.rounds.find(
+            (lr: any) => lr.id === r.id || Number(lr.round_number) === Number(r.round_number)
+          );
+          return matched ? { ...r, ...matched, question_pool_count: r.question_pool_count ?? matched.question_pool_count } : r;
+        });
+      }
+
+      // Authoritative count check: if pool count is 0 or undefined, query /api/questions
+      const enrichedRounds = await Promise.all(
+        roundsList.map(async (r: ExaminationRound) => {
+          if (r.question_pool_count && r.question_pool_count > 0) return r;
+          try {
+            const qRes = await fetch(`/api/questions?roundId=${r.id}`);
+            const qJson = await qRes.json();
+            if (qJson.success && Array.isArray(qJson.data)) {
+              return { ...r, question_pool_count: qJson.data.length };
+            }
+          } catch {}
+          return r;
+        })
+      );
+
+      setRounds(enrichedRounds);
 
       const examRes = await fetch(`/api/examinations/${examId}`);
       const examJson = await examRes.json();
       if (examJson.success && examJson.data) {
-        setExam(examJson.data);
+        setExam(localExam ? { ...examJson.data, name: localExam.name || examJson.data.name } : examJson.data);
+      } else if (localExam) {
+        setExam(localExam);
       }
     } catch {
       toast.error('Failed to load rounds');
@@ -113,12 +157,12 @@ function AdminRoundsConfigContent() {
     try {
       const payload = {
         ...round,
-        duration_minutes: Number(round.duration_minutes) || 30,
-        total_questions: Number(round.total_questions) || 10,
+        duration_minutes: Number(round.duration_minutes) || 15,
+        total_questions: Number(round.total_questions) || 30,
         marks_per_question: Number(round.marks_per_question) || 1,
         negative_marks: Number(round.negative_marks) || 0,
-        qualifying_marks: Number(round.qualifying_marks) || 1,
-        total_marks: (Number(round.total_questions) || 10) * (Number(round.marks_per_question) || 1),
+        qualifying_marks: Number(round.qualifying_marks) || 15,
+        total_marks: (Number(round.total_questions) || 30) * (Number(round.marks_per_question) || 1),
       };
       const res = await fetch(`/api/examinations/${examId}/rounds`, {
         method: 'POST',
@@ -129,6 +173,20 @@ function AdminRoundsConfigContent() {
       if (data.success && data.data) {
         toast.success(`Saved changes for ${payload.name}`);
         setRounds((prev) => prev.map((r) => (r.id === payload.id ? { ...r, ...data.data } : r)));
+
+        // Persist to local storage so serverless lambdas can never overwrite it
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              parsed.rounds = (parsed.rounds || []).map((r: any) =>
+                r.id === payload.id || r.round_number === payload.round_number ? { ...r, ...payload, ...data.data } : r
+              );
+              localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsed));
+            }
+          } catch {}
+        }
       } else {
         toast.error(data.error || 'Failed to update round');
       }
@@ -211,6 +269,7 @@ function AdminRoundsConfigContent() {
       const formData = new FormData();
       formData.append('file', pdfFile);
       formData.append('roundId', selectedRoundForPdf.id);
+      formData.append('count', '100');
 
       const res = await fetch('/api/questions/upload-pdf', {
         method: 'POST',
@@ -218,13 +277,13 @@ function AdminRoundsConfigContent() {
       });
       const data = await res.json();
       if (data.success) {
-        toast.success('Question PDF uploaded. OCR pipeline enqueued to extract question bank.');
+        toast.success(data.message || 'Question PDF uploaded and questions extracted successfully.');
         setPdfModalOpen(false);
         setPdfFile(null);
-        // Refresh after short delay to allow simulated OCR to register
+        fetchRounds();
         setTimeout(() => {
           fetchRounds();
-        }, 3200);
+        }, 1500);
       } else {
         toast.error(data.error || 'Upload failed');
       }
