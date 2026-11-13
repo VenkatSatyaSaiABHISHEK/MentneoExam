@@ -44,6 +44,23 @@ function ExamInstructionsContent() {
           if (savedStudent) {
             setStudent(JSON.parse(savedStudent));
           }
+
+          // Check if candidate already completed this examination
+          const regId = localStorage.getItem(`exam_reg_${found.id}`);
+          if (regId) {
+            try {
+              const resCheck = await fetch(`/api/examinations/${found.id}/results`);
+              const resJson = await resCheck.json();
+              if (resJson.success && Array.isArray(resJson.data)) {
+                const foundResult = resJson.data.find((r: any) => r.registration_id === regId);
+                if (foundResult) {
+                  toast.info('You have already completed this examination.');
+                  router.push(`/exam/${slug}/result?attemptId=${foundResult.attempt_id}`);
+                  return;
+                }
+              }
+            } catch {}
+          }
         }
       } catch {
         toast.error('Failed to load examination instructions.');

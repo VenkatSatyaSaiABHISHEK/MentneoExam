@@ -22,6 +22,7 @@ import {
   Check,
   CheckCheck,
   Database,
+  Maximize2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -73,6 +74,8 @@ function ExaminationEngineContent() {
   const [maxWarnings, setMaxWarnings] = React.useState<number>(3);
   const [violationReason, setViolationReason] = React.useState<string>('');
   const [isTerminated, setIsTerminated] = React.useState(false);
+  const [isInFullscreen, setIsInFullscreen] = React.useState(true);
+  const [fullscreenPromptOpen, setFullscreenPromptOpen] = React.useState(false);
 
   // Submission modal state
   const [submitModalOpen, setSubmitModalOpen] = React.useState(false);
@@ -163,6 +166,11 @@ function ExaminationEngineContent() {
         const startData = await startRes.json();
 
         if (!startRes.ok || !startData.success) {
+          if (startData.alreadySubmitted && startData.attemptId) {
+            toast.error('You have already completed this examination round. Duplicate attempts are prohibited.');
+            router.push(`/exam/${slug}/result?attemptId=${startData.attemptId}`);
+            return;
+          }
           toast.error(startData.error || 'Failed to initialize attempt.');
           return;
         }
@@ -297,6 +305,25 @@ function ExaminationEngineContent() {
       }
     };
 
+    // Check initial fullscreen state
+    if (!isAiTabAllowed && typeof document !== 'undefined') {
+      const isFs = Boolean(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      setIsInFullscreen(isFs);
+      if (!isFs) {
+        setFullscreenPromptOpen(true);
+      }
+    }
+
+    const handleFullscreenChange = () => {
+      if (isAiTabAllowed) return;
+      const isFs = Boolean(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      setIsInFullscreen(isFs);
+      if (!isFs) {
+        setFullscreenPromptOpen(true);
+        reportViolation('fullscreen_exit', 'Candidate exited fullscreen examination mode');
+      }
+    };
+
     const handleVisibilityChange = () => {
       if (isAiTabAllowed) return; // Tab switching permitted for this round!
       if (document.hidden) {
@@ -323,6 +350,7 @@ function ExaminationEngineContent() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
+        e.key === 'F11' ||
         e.key === 'F12' ||
         e.key === 'PrintScreen' ||
         (!isCopyAllowed && e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 'c' || e.key === 'C'))
@@ -332,20 +360,51 @@ function ExaminationEngineContent() {
       }
     };
 
+    const handleContextMenu = (e: MouseEvent) => {
+      if (!isAiTabAllowed) e.preventDefault();
+    };
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('copy', handleCopy);
     document.addEventListener('paste', handlePaste);
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('copy', handleCopy);
       document.removeEventListener('paste', handlePaste);
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [attempt, isTerminated, currentRound, slug, router]);
+
+  const requestExamFullscreen = async () => {
+    try {
+      if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      } else if ((document.documentElement as any).webkitRequestFullscreen) {
+        await (document.documentElement as any).webkitRequestFullscreen();
+      }
+      setIsInFullscreen(true);
+      setFullscreenPromptOpen(false);
+    } catch {
+      toast.error('Fullscreen mode is mandatory. Please click to allow fullscreen.');
+    }
+  };
 
   // Reconnection listener to automatically flush queued answers
   React.useEffect(() => {
@@ -782,75 +841,12 @@ function ExaminationEngineContent() {
         </div>
       )}
 
-      {/* Main 3-Column Workspace */}
+      {/* Main Spacious 2-Column Workspace (Claude / ChatGPT / WhatsApp Standard) */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* ========================================================= */}
-        {/* LEFT COLUMN: CLOCK & QUESTION COUNT SUMMARY               */}
+        {/* MAIN WORKSPACE: SPACIOUS QUESTION CARD (8 OF 12 COLS)     */}
         {/* ========================================================= */}
-        <aside className="hidden lg:flex lg:col-span-3 flex-col gap-4 sticky top-24">
-          {/* Authoritative Clock Card */}
-          <Card className="p-5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-gray-400 block mb-1">
-              Time Remaining
-            </span>
-            <div
-              className={cn(
-                'flex items-center gap-2.5 font-mono text-2xl font-bold tracking-tight',
-                isLowTime ? 'text-rose-600 animate-pulse' : 'text-gray-900'
-              )}
-            >
-              <Clock className={cn('w-6 h-6', isLowTime ? 'text-rose-600' : 'text-gray-500')} />
-              <span>{formatTimeRemaining(secondsRemaining)}</span>
-            </div>
-            <p className="text-[11px] text-gray-400 mt-2">
-              Server-authoritative timer synchronized with UTC clock.
-            </p>
-          </Card>
-
-          {/* Questions Count & Round Details Card */}
-          <Card className="p-5 space-y-3">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-800">Round Details</span>
-              <Badge variant="neutral">Round {roundNum}</Badge>
-            </div>
-
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Total Questions:</span>
-                <strong className="text-gray-900">{questions.length}</strong>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Assessment Type:</span>
-                <span className="font-semibold text-gray-900 capitalize">
-                  {currentRound?.round_type || 'MCQ'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Qualifying Marks:</span>
-                <span className="font-semibold text-emerald-700">
-                  {currentRound?.qualifying_marks} / {currentRound?.total_marks}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Policy:</span>
-                <span className="font-semibold text-gray-700">
-                  {isAiAllowed ? 'Open AI Allowed' : 'Strict Proctoring'}
-                </span>
-              </div>
-            </div>
-
-            {/* Candidate Identity */}
-            <div className="pt-3 border-t border-gray-100 text-[11px] text-gray-500">
-              <p>Candidate: <strong className="text-gray-800">{student?.full_name}</strong></p>
-              <p className="font-mono text-[10px] mt-0.5">ID: {student?.roll_number}</p>
-            </div>
-          </Card>
-        </aside>
-
-        {/* ========================================================= */}
-        {/* CENTER AREA: QUESTION WORKSPACE (MCQ OR CODING SANDBOX)   */}
-        {/* ========================================================= */}
-        <main className="lg:col-span-6 flex flex-col bg-white border border-gray-200 rounded-xl p-5 sm:p-7 shadow-xs min-h-[560px]">
+        <main className="lg:col-span-8 flex flex-col bg-white border border-gray-200 rounded-2xl p-6 sm:p-8 md:p-10 shadow-xs min-h-[580px]">
           {currentQuestion ? (
             isCodingRound ? (
               /* Coding Sandbox Interface */
@@ -1053,98 +1049,140 @@ function ExaminationEngineContent() {
         </main>
 
         {/* ========================================================= */}
-        {/* RIGHT COLUMN: QUESTIONS COMPLETED BOX & PALETTE           */}
+        {/* RIGHT COLUMN: TIMER, DETAILS & PALETTE (4 OF 12 COLS)     */}
         {/* ========================================================= */}
-        <aside className="hidden lg:flex lg:col-span-3 flex-col gap-4 sticky top-24">
-          {/* Questions Completed Box */}
-          <Card className="p-5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-gray-400 block mb-1">
-              Questions Completed
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-bold font-mono text-gray-900">{answeredCount}</span>
-              <span className="text-xs text-gray-400 font-mono">/ {questions.length} total</span>
+        <aside className="hidden lg:flex lg:col-span-4 flex-col gap-4 sticky top-24">
+          {/* Authoritative Timer & Stage Card */}
+          <Card className="p-5 border-slate-200/90 shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-gray-400">
+                Time Remaining
+              </span>
+              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-800">
+                Round {roundNum}
+              </span>
             </div>
 
-            {/* Progress Bar */}
-            <div className="w-full bg-gray-100 h-2 rounded-full mt-3 overflow-hidden">
-              <div
-                className="bg-gray-900 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${(answeredCount / Math.max(1, questions.length)) * 100}%` }}
-              />
+            <div
+              className={cn(
+                'flex items-center gap-2.5 font-mono text-3xl font-bold tracking-tight my-3',
+                isLowTime ? 'text-rose-600 animate-pulse' : 'text-gray-900'
+              )}
+            >
+              <Clock className={cn('w-7 h-7', isLowTime ? 'text-rose-600' : 'text-gray-500')} />
+              <span>{formatTimeRemaining(secondsRemaining)}</span>
             </div>
 
-            {/* Breakdown */}
-            <div className="grid grid-cols-3 gap-2 mt-4 text-center text-xs pt-3 border-t border-gray-100">
-              <div>
-                <span className="text-[10px] uppercase text-gray-400 block font-semibold">Done</span>
-                <span className="font-bold text-gray-900">{answeredCount}</span>
+            <div className="space-y-1.5 pt-2 border-t border-gray-100 text-xs text-gray-600">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Candidate:</span>
+                <strong className="text-gray-900">{student?.full_name}</strong>
               </div>
-              <div>
-                <span className="text-[10px] uppercase text-gray-400 block font-semibold">Left</span>
-                <span className="font-bold text-rose-600">{unansweredCount}</span>
+              <div className="flex justify-between">
+                <span className="text-gray-400">ID / Roll:</span>
+                <span className="font-mono text-gray-800">{student?.roll_number}</span>
               </div>
-              <div>
-                <span className="text-[10px] uppercase text-gray-400 block font-semibold">Review</span>
-                <span className="font-bold text-amber-600">{markedReviewCount}</span>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Pass Criteria:</span>
+                <span className="font-semibold text-emerald-700">
+                  {currentRound?.qualifying_marks} / {currentRound?.total_marks} marks
+                </span>
               </div>
             </div>
           </Card>
 
-          {/* Palette Grid */}
-          <Card className="p-5">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-800 mb-3">
-              Question Palette
-            </h3>
+          {/* Questions Completed & Question Palette */}
+          <Card className="p-5 border-slate-200/90 shadow-xs space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-gray-400">
+                  Questions Completed
+                </span>
+                <span className="text-xs font-mono font-bold text-gray-900">
+                  {answeredCount} / {questions.length}
+                </span>
+              </div>
 
-            <div className="grid grid-cols-5 gap-2 max-h-60 overflow-y-auto pr-1">
-              {questions.map((q, idx) => {
-                const ans = answers[q.id];
-                const isAnswered = Boolean(ans?.selected_option || (ans?.code_snippet && ans.code_snippet.trim().length > 10));
-                const isMarked = Boolean(ans?.is_marked_for_review);
-                const isCurrent = idx === currentIndex;
-                const isSynced = questionSyncMap[q.id] === 'synced';
+              {/* Progress Bar */}
+              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-gray-900 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${(answeredCount / Math.max(1, questions.length)) * 100}%` }}
+                />
+              </div>
 
-                let btnStyle = 'border-gray-200 bg-white text-gray-700 hover:border-gray-400';
-                if (isMarked) {
-                  btnStyle = 'border-amber-400 bg-amber-50 text-amber-900 font-semibold';
-                } else if (isAnswered) {
-                  btnStyle = 'border-gray-900 bg-gray-900 text-white font-bold';
-                }
+              {/* Breakdown */}
+              <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs pt-2.5 border-t border-gray-100">
+                <div className="p-1 rounded bg-slate-50">
+                  <span className="text-[10px] uppercase text-gray-400 block font-semibold">Done</span>
+                  <span className="font-bold text-gray-900">{answeredCount}</span>
+                </div>
+                <div className="p-1 rounded bg-rose-50">
+                  <span className="text-[10px] uppercase text-rose-500 block font-semibold">Left</span>
+                  <span className="font-bold text-rose-600">{unansweredCount}</span>
+                </div>
+                <div className="p-1 rounded bg-amber-50">
+                  <span className="text-[10px] uppercase text-amber-500 block font-semibold">Review</span>
+                  <span className="font-bold text-amber-600">{markedReviewCount}</span>
+                </div>
+              </div>
+            </div>
 
-                return (
-                  <button
-                    key={q.id}
-                    onClick={() => setCurrentIndex(idx)}
-                    className={cn(
-                      'relative h-9 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
-                      btnStyle,
-                      isCurrent && 'ring-2 ring-blue-500 ring-offset-1 font-bold'
-                    )}
-                  >
-                    <span>{idx + 1}</span>
-                    {isAnswered && (
-                      <span
-                        className={cn(
-                          'absolute top-1 right-1 w-1.5 h-1.5 rounded-full',
-                          isSynced ? 'bg-emerald-400' : 'bg-slate-300'
-                        )}
-                        title={isSynced ? 'Cloud Synced' : 'Saved to Device'}
-                      />
-                    )}
-                  </button>
-                );
-              })}
+            {/* Palette Grid */}
+            <div className="pt-3 border-t border-gray-100">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-800 mb-3">
+                Question Palette
+              </h3>
+
+              <div className="grid grid-cols-5 gap-2 max-h-56 overflow-y-auto pr-1">
+                {questions.map((q, idx) => {
+                  const ans = answers[q.id];
+                  const isAnswered = Boolean(ans?.selected_option || (ans?.code_snippet && ans.code_snippet.trim().length > 10));
+                  const isMarked = Boolean(ans?.is_marked_for_review);
+                  const isCurrent = idx === currentIndex;
+                  const isSynced = questionSyncMap[q.id] === 'synced';
+
+                  let btnStyle = 'border-gray-200 bg-white text-gray-700 hover:border-gray-400';
+                  if (isMarked) {
+                    btnStyle = 'border-amber-400 bg-amber-50 text-amber-900 font-semibold';
+                  } else if (isAnswered) {
+                    btnStyle = 'border-gray-900 bg-gray-900 text-white font-bold';
+                  }
+
+                  return (
+                    <button
+                      key={q.id}
+                      onClick={() => setCurrentIndex(idx)}
+                      className={cn(
+                        'relative h-9 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
+                        btnStyle,
+                        isCurrent && 'ring-2 ring-blue-500 ring-offset-1 font-bold'
+                      )}
+                    >
+                      <span>{idx + 1}</span>
+                      {isAnswered && (
+                        <span
+                          className={cn(
+                            'absolute top-1 right-1 w-1.5 h-1.5 rounded-full',
+                            isSynced ? 'bg-emerald-400' : 'bg-slate-300'
+                          )}
+                          title={isSynced ? 'Cloud Synced' : 'Saved to Device'}
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Submit Action */}
-            <div className="mt-5 pt-4 border-t border-gray-100">
+            <div className="pt-2">
               <Button
                 variant={isSubmitLocked ? 'outline' : 'primary'}
                 size="sm"
                 disabled={isSubmitLocked}
                 onClick={() => setSubmitModalOpen(true)}
-                className="w-full text-xs font-semibold uppercase tracking-wider h-10"
+                className="w-full text-xs font-semibold uppercase tracking-wider h-10 font-mono"
               >
                 {isSubmitLocked ? (
                   <span>Unlocks in {formatTimeRemaining(submitLockRemaining)}</span>
@@ -1309,6 +1347,44 @@ function ExaminationEngineContent() {
           </div>
         </div>
       </Dialog>
+
+      {/* Strict Fullscreen Mode Mandatory Overlay */}
+      {fullscreenPromptOpen && !isAiAllowed && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 select-none">
+          <div className="max-w-md w-full bg-white rounded-2xl p-6 sm:p-8 shadow-2xl border border-slate-200 text-center space-y-5">
+            <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto shadow-xs">
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase font-bold tracking-widest text-rose-600 font-mono">
+                Strict Proctoring Protocol Active
+              </span>
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+                Fullscreen Mode Required
+              </h2>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                To prevent unauthorized application switching and ensure academic integrity, this examination must remain in Fullscreen Mode. Exiting fullscreen logs an automated cheating infraction.
+              </p>
+            </div>
+
+            <div className="py-2.5 px-3.5 rounded-lg bg-slate-50 border border-slate-200/80 text-xs font-mono text-slate-700 flex justify-between items-center">
+              <span>Candidate: {student?.full_name || 'Registered'}</span>
+              <span className="font-bold text-rose-600">
+                Warnings: {currentWarning} / {maxWarnings}
+              </span>
+            </div>
+
+            <Button
+              onClick={requestExamFullscreen}
+              className="w-full h-11 text-xs font-semibold uppercase tracking-wider font-mono gap-2"
+            >
+              <Maximize2 className="w-4 h-4" />
+              <span>Enter Fullscreen & Resume Examination</span>
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

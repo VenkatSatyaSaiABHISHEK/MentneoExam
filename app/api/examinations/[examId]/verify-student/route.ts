@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db/store';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function POST(
   req: Request,
@@ -34,13 +35,43 @@ export async function POST(
       );
     }
 
+    // Check if this candidate already has completed attempts (prevent rewriting)
+    let hasCompletedAttempt = false;
+    let completedAttemptId: string | null = null;
+    const regId = verification.registration?.id;
+
+    if (regId) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data: sbAtt } = await supabase
+            .from('examination_attempts')
+            .select('id, status')
+            .eq('registration_id', regId)
+            .in('status', ['submitted', 'timed_out', 'terminated'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (sbAtt) {
+            hasCompletedAttempt = true;
+            completedAttemptId = sbAtt.id;
+          }
+        } catch {}
+      }
+    }
+
     return NextResponse.json({
       success: true,
       verified: true,
+      hasCompletedAttempt,
+      completedAttemptId,
       data: {
         student: verification.student,
         registrationId: verification.registration?.id,
         status: verification.registration?.status,
+        hasCompletedAttempt,
+        completedAttemptId,
         examination: {
           id: verification.examination?.id,
           name: verification.examination?.name,

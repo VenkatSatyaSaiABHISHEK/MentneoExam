@@ -37,7 +37,19 @@ export async function POST(req: Request) {
         isExpired: secondsRemaining <= 0,
       },
     });
-  } catch (error: unknown) {
+  } catch (error: any) {
+    if (error?.alreadySubmitted) {
+      return NextResponse.json(
+        {
+          success: false,
+          alreadySubmitted: true,
+          attemptId: error.attemptId,
+          attemptStatus: error.attemptStatus,
+          error: error.message || 'You have already completed this examination round.',
+        },
+        { status: 403 }
+      );
+    }
     const message = error instanceof Error ? error.message : 'Failed to start attempt.';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }

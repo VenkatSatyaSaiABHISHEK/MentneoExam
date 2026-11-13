@@ -46,6 +46,8 @@ function ExamRegistrationContent() {
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [registeredRegId, setRegisteredRegId] = React.useState<string | null>(null);
   const [storedStudentData, setStoredStudentData] = React.useState<Student | null>(null);
+  const [hasCompletedAttempt, setHasCompletedAttempt] = React.useState(false);
+  const [completedAttemptId, setCompletedAttemptId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     async function loadExam() {
@@ -69,6 +71,19 @@ function ExamRegistrationContent() {
                 // ignore
               }
             }
+
+            // Check if this candidate has already completed an attempt (prevent rewrite)
+            try {
+              const resCheck = await fetch(`/api/examinations/${found.id}/results`);
+              const resJson = await resCheck.json();
+              if (resJson.success && Array.isArray(resJson.data)) {
+                const foundResult = resJson.data.find((r: any) => r.registration_id === savedReg);
+                if (foundResult) {
+                  setHasCompletedAttempt(true);
+                  setCompletedAttemptId(foundResult.attempt_id);
+                }
+              }
+            } catch {}
           }
         }
       } catch {
@@ -112,7 +127,14 @@ function ExamRegistrationContent() {
 
       setVerifiedStudent(data.data.student);
       setVerifiedRegId(data.data.registrationId);
-      toast.success('Candidate identity verified.');
+
+      if (data.hasCompletedAttempt && data.completedAttemptId) {
+        setHasCompletedAttempt(true);
+        setCompletedAttemptId(data.completedAttemptId);
+        toast.info('You have already submitted this examination. Re-attempts are prohibited.');
+      } else {
+        toast.success('Candidate identity verified.');
+      }
     } catch {
       setLoginError('Network verification error. Please try again.');
     } finally {
@@ -391,13 +413,35 @@ function ExamRegistrationContent() {
                       )}
                     </div>
 
-                    <Button
-                      onClick={handleProceedToInstructions}
-                      className="w-full text-xs font-semibold uppercase tracking-wider gap-2 h-10"
-                    >
-                      <span>Proceed to Instructions</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </Button>
+                    {hasCompletedAttempt ? (
+                      <div className="space-y-3">
+                        <div className="p-3.5 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-900 space-y-1">
+                          <p className="font-bold flex items-center gap-1.5 text-amber-950">
+                            <ShieldAlert className="w-4 h-4 text-amber-600" />
+                            <span>Examination Already Completed</span>
+                          </p>
+                          <p className="text-[11px] text-amber-800">
+                            You have already finalized and submitted this examination. Retakes and duplicate submissions are strictly prohibited by examination policy.
+                          </p>
+                        </div>
+
+                        <Button
+                          onClick={() => router.push(`/exam/${slug}/result?attemptId=${completedAttemptId}`)}
+                          className="w-full text-xs font-semibold uppercase tracking-wider gap-2 h-10 font-mono"
+                        >
+                          <span>View Examination Results</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={handleProceedToInstructions}
+                        className="w-full text-xs font-semibold uppercase tracking-wider gap-2 h-10"
+                      >
+                        <span>Proceed to Instructions</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </Button>
+                    )}
 
                     <button
                       type="button"

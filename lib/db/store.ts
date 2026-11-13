@@ -2015,12 +2015,56 @@ export const db = {
     const regRoundKey = `${params.registrationId}_${params.roundId}`;
     if (!store.attemptByRegAndRound) store.attemptByRegAndRound = new Map();
     const existingAttemptId = store.attemptByRegAndRound.get(regRoundKey);
-    const existing = existingAttemptId ? store.attempts.get(existingAttemptId) : undefined;
+    let existing = existingAttemptId ? store.attempts.get(existingAttemptId) : undefined;
 
     const round = store.rounds.get(params.roundId);
     if (!round) throw new Error('Round not found');
 
+    const supabase = createAdminClient();
+    if (!existing && supabase) {
+      try {
+        const { data: sbAtt } = await supabase
+          .from('examination_attempts')
+          .select('*')
+          .eq('registration_id', params.registrationId)
+          .eq('round_id', params.roundId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (sbAtt) {
+          existing = {
+            id: sbAtt.id,
+            registration_id: sbAtt.registration_id,
+            round_id: sbAtt.round_id,
+            started_at: sbAtt.started_at,
+            deadline_at: sbAtt.deadline_at,
+            submitted_at: sbAtt.submitted_at,
+            status: sbAtt.status as any,
+            assigned_question_ids: Array.isArray(sbAtt.assigned_question_ids) ? sbAtt.assigned_question_ids : [],
+            cheating_warnings: sbAtt.cheating_warnings || 0,
+            ip_address: sbAtt.ip_address,
+            user_agent: sbAtt.user_agent,
+            created_at: sbAtt.created_at,
+          };
+          store.attempts.set(existing.id, existing);
+          store.attemptByRegAndRound.set(regRoundKey, existing.id);
+        }
+      } catch {}
+    }
+
     if (existing) {
+      // Check if attempt is already completed, submitted, terminated, or timed out
+      if (existing.status === 'submitted' || existing.status === 'timed_out' || existing.status === 'terminated') {
+        const err: any = new Error(
+          'EXAM_ALREADY_SUBMITTED: You have already completed this examination round. Duplicate attempts are strictly prohibited.'
+        );
+        err.alreadySubmitted = true;
+        err.attemptId = existing.id;
+        err.attemptStatus = existing.status;
+        throw err;
+      }
+
       const questions = existing.assigned_question_ids
         .map((id) => store.questions.get(id))
         .filter((q): q is Question => Boolean(q))
@@ -2115,6 +2159,25 @@ export const db = {
     if (!store.attemptByRegAndRound) store.attemptByRegAndRound = new Map();
     store.attemptByRegAndRound.set(regRoundKey, attemptId);
     resilientStorage.scheduleSave(() => store.toSnapshot());
+
+    // Synchronize attempt creation to Supabase
+    if (supabase) {
+      try {
+        await supabase.from('examination_attempts').upsert({
+          id: attempt.id,
+          registration_id: attempt.registration_id,
+          round_id: attempt.round_id,
+          started_at: attempt.started_at,
+          deadline_at: attempt.deadline_at,
+          status: attempt.status,
+          assigned_question_ids: attempt.assigned_question_ids,
+          cheating_warnings: attempt.cheating_warnings,
+          ip_address: attempt.ip_address,
+          user_agent: attempt.user_agent,
+          created_at: attempt.created_at,
+        });
+      } catch {}
+    }
 
     // Update registration status to 'started'
     const reg = store.registrations.get(params.registrationId);
@@ -2382,6 +2445,16 @@ export const db = {
       attempt.submitted_at = new Date().toISOString();
       store.attempts.set(attempt.id, attempt);
 
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          await supabase.from('examination_attempts').update({
+            status: 'submitted',
+            submitted_at: attempt.submitted_at,
+          }).eq('id', attempt.id);
+        } catch {}
+      }
+
       // Save result
       const result: ExaminationResult = {
         id: `res-${attemptId}`,
@@ -2398,6 +2471,25 @@ export const db = {
         evaluated_at: new Date().toISOString(),
       };
       store.results.set(attemptId, result);
+
+      if (supabase) {
+        try {
+          await supabase.from('examination_results').upsert({
+            id: result.id,
+            attempt_id: result.attempt_id,
+            registration_id: result.registration_id,
+            round_id: result.round_id,
+            score: result.score,
+            total_marks: result.total_marks,
+            qualifying_marks: result.qualifying_marks,
+            is_qualified: result.is_qualified,
+            correct_count: result.correct_count,
+            wrong_count: result.wrong_count,
+            unanswered_count: result.unanswered_count,
+            evaluated_at: result.evaluated_at,
+          });
+        } catch {}
+      }
 
       // Dynamic next round qualification resolution
       const allRounds = Array.from(store.rounds.values())
@@ -2719,6 +2811,16 @@ export const db = {
     const oldAttemptId = attempt.id;
     store.attempts.delete(oldAttemptId);
     store.results.delete(oldAttemptId);
+    const regRoundKey = `${reg.id}_${roundId}`;
+    if (store.attemptByRegAndRound) store.attemptByRegAndRound.delete(regRoundKey);
+
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        await supabase.from('examination_attempts').delete().eq('id', oldAttemptId);
+        await supabase.from('examination_results').delete().eq('attempt_id', oldAttemptId);
+      } catch {}
+    }
 
     // 2. Clear stored answers for this attempt
     for (const key of Array.from(store.answers.keys())) {
