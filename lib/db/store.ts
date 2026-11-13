@@ -2206,7 +2206,10 @@ export const db = {
       clientTimestamp?: string;
     }>;
   }): Promise<AttemptAnswer[]> {
-    const attempt = store.attempts.get(params.attemptId);
+    let attempt = store.attempts.get(params.attemptId);
+    if (!attempt) {
+      attempt = (await this.getAttemptById(params.attemptId)) || undefined;
+    }
     if (!attempt) throw new Error('Attempt not found');
 
     const now = new Date();
@@ -2250,6 +2253,27 @@ export const db = {
     // High performance append to WAL (zero event loop freeze)
     resilientStorage.appendAnswerDeltas(updatedAnswers);
 
+    // Persist to Supabase attempt_answers table so state is preserved across serverless lambdas
+    const supabase = createAdminClient();
+    if (supabase && updatedAnswers.length > 0) {
+      try {
+        const rowsToUpsert = updatedAnswers.map((ans) => ({
+          id: ans.id,
+          attempt_id: ans.attempt_id,
+          question_id: ans.question_id,
+          selected_option: ans.selected_option,
+          code_snippet: ans.code_snippet,
+          code_language: ans.code_language,
+          is_marked_for_review: ans.is_marked_for_review,
+          answered_at: ans.answered_at,
+          updated_at: ans.updated_at,
+        }));
+        await supabase.from('attempt_answers').upsert(rowsToUpsert);
+      } catch (err) {
+        console.warn('[saveAttemptAnswersBatch] Supabase upsert error:', err);
+      }
+    }
+
     return updatedAnswers;
   },
 
@@ -2285,11 +2309,14 @@ export const db = {
     violationType: CheatingEvent['violation_type'];
     metadata?: Record<string, unknown>;
   }): Promise<{ warningNumber: number; maxWarnings: number; isTerminated: boolean }> {
-    const attempt = store.attempts.get(params.attemptId);
+    let attempt = store.attempts.get(params.attemptId);
+    if (!attempt) {
+      attempt = (await this.getAttemptById(params.attemptId)) || undefined;
+    }
     if (!attempt) throw new Error('Attempt not found');
 
-    const round = store.rounds.get(attempt.round_id);
-    const exam = round ? store.examinations.get(round.examination_id) : null;
+    const round = store.rounds.get(attempt.round_id) || (await this.getRoundById(attempt.round_id));
+    const exam = round ? store.examinations.get(round.examination_id) || (await this.getExaminationById(round.examination_id)) : null;
     const maxWarnings = exam?.max_cheating_warnings ?? 3;
 
     const warningNumber = attempt.cheating_warnings + 1;
@@ -2313,6 +2340,20 @@ export const db = {
     store.cheatingEvents.push(event);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        await supabase
+          .from('examination_attempts')
+          .update({
+            cheating_warnings: warningNumber,
+            status: attempt.status,
+            submitted_at: attempt.submitted_at,
+          })
+          .eq('id', attempt.id);
+      } catch {}
+    }
+
     return { warningNumber, maxWarnings, isTerminated };
   },
 
@@ -2320,22 +2361,13 @@ export const db = {
   async submitAttempt(attemptId: string): Promise<ExaminationResult> {
     let attempt: ExaminationAttempt | undefined = store.attempts.get(attemptId);
     if (!attempt) {
+      attempt = (await this.getAttemptById(attemptId)) || undefined;
+    }
+    if (!attempt) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.attempts) {
         store.hydrate(snap);
         attempt = store.attempts.get(attemptId);
-      }
-    }
-    if (!attempt) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data } = await supabase.from('examination_attempts').select('*').eq('id', attemptId).single();
-          if (data) {
-            attempt = data as ExaminationAttempt;
-            store.attempts.set(attemptId, attempt);
-          }
-        } catch {}
       }
     }
     const activeAttempt: ExaminationAttempt = attempt || {
@@ -2354,7 +2386,10 @@ export const db = {
     attempt = activeAttempt;
 
     // Idempotency: return existing result if already processed
-    const existingResult = store.results.get(attemptId);
+    let existingResult = store.results.get(attemptId);
+    if (!existingResult) {
+      existingResult = (await this.getAttemptResult(attemptId)) || undefined;
+    }
     if (existingResult) {
       return existingResult;
     }
@@ -2407,11 +2442,27 @@ export const db = {
       let unansweredCount = 0;
       let rawScore = 0;
 
+      const supabase = createAdminClient();
+
       if (round.round_type === 'coding') {
         let codeAnswered = 0;
         for (const qId of attempt.assigned_question_ids) {
           const key = `${attemptId}_${qId}`;
-          const answer = store.answers.get(key);
+          let answer = store.answers.get(key);
+          if (!answer && supabase) {
+            try {
+              const { data: dbAns } = await supabase
+                .from('attempt_answers')
+                .select('*')
+                .eq('attempt_id', attemptId)
+                .eq('question_id', qId)
+                .maybeSingle();
+              if (dbAns) {
+                answer = dbAns;
+                store.answers.set(key, dbAns);
+              }
+            } catch {}
+          }
           if (answer && answer.code_snippet && answer.code_snippet.trim().length > 15) {
             codeAnswered++;
           }
@@ -2421,14 +2472,36 @@ export const db = {
         unansweredCount = attempt.assigned_question_ids.length - codeAnswered;
         rawScore = codeAnswered * round.marks_per_question;
       } else {
+        // Ensure question keys are loaded from round pool
+        if (store.answerKeys.size === 0 || !attempt.assigned_question_ids.some((qId) => store.answerKeys.has(qId))) {
+          await this.getQuestionsByRoundId(attempt.round_id);
+        }
+
+        // Fetch answers from Supabase if missing in store.answers
+        let loadedDbAnswers = false;
         for (const qId of attempt.assigned_question_ids) {
           const key = `${attemptId}_${qId}`;
+          if (!store.answers.has(key) && !loadedDbAnswers && supabase) {
+            loadedDbAnswers = true;
+            try {
+              const { data: dbAnswers } = await supabase
+                .from('attempt_answers')
+                .select('*')
+                .eq('attempt_id', attemptId);
+              if (dbAnswers) {
+                for (const a of dbAnswers) {
+                  store.answers.set(`${attemptId}_${a.question_id}`, a);
+                }
+              }
+            } catch {}
+          }
+
           const answer = store.answers.get(key);
           const answerKey = store.answerKeys.get(qId);
 
           if (!answer || !answer.selected_option) {
             unansweredCount++;
-          } else if (answerKey && answer.selected_option === answerKey.correct_option_label) {
+          } else if (answerKey && answer.selected_option.trim().toUpperCase() === answerKey.correct_option_label.trim().toUpperCase()) {
             correctCount++;
           } else {
             wrongCount++;
@@ -2445,7 +2518,6 @@ export const db = {
       attempt.submitted_at = new Date().toISOString();
       store.attempts.set(attempt.id, attempt);
 
-      const supabase = createAdminClient();
       if (supabase) {
         try {
           await supabase.from('examination_attempts').update({
@@ -2492,9 +2564,8 @@ export const db = {
       }
 
       // Dynamic next round qualification resolution
-      const allRounds = Array.from(store.rounds.values())
-        .filter((r) => r.examination_id === round.examination_id)
-        .sort((a, b) => a.round_number - b.round_number);
+      const allRounds = await this.getRoundsByExamId(round.examination_id);
+      allRounds.sort((a, b) => a.round_number - b.round_number);
 
       const nextRound = allRounds.find((r) => r.round_number === round.round_number + 1);
 
@@ -2510,7 +2581,7 @@ export const db = {
       store.qualifications.set(qualKey, qualification);
 
       // Update registration status
-      const reg = store.registrations.get(attempt.registration_id);
+      let reg = store.registrations.get(attempt.registration_id);
       if (reg) {
         if (!isQualified) {
           reg.status = 'completed';
@@ -2526,11 +2597,37 @@ export const db = {
   },
 
   async getAttemptResult(attemptId: string): Promise<ExaminationResult | null> {
-    return store.results.get(attemptId) || null;
+    let res = store.results.get(attemptId);
+    if (!res) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data } = await supabase.from('examination_results').select('*').eq('attempt_id', attemptId).maybeSingle();
+          if (data) {
+            res = data as ExaminationResult;
+            store.results.set(attemptId, res);
+          }
+        } catch {}
+      }
+    }
+    return res || null;
   },
 
   async getAttemptById(attemptId: string): Promise<ExaminationAttempt | null> {
-    return store.attempts.get(attemptId) || null;
+    let attempt = store.attempts.get(attemptId);
+    if (!attempt) {
+      const supabase = createAdminClient();
+      if (supabase) {
+        try {
+          const { data } = await supabase.from('examination_attempts').select('*').eq('id', attemptId).maybeSingle();
+          if (data) {
+            attempt = data as ExaminationAttempt;
+            store.attempts.set(attemptId, attempt);
+          }
+        } catch {}
+      }
+    }
+    return attempt || null;
   },
 
   async getQualification(regId: string, roundId: string): Promise<RoundQualification | null> {
@@ -2539,6 +2636,34 @@ export const db = {
 
   // ADMIN MONITORING & STATS
   async getAdminStats(): Promise<AdminStats> {
+    const supabase = createAdminClient();
+    if (supabase) {
+      try {
+        const [{ count: totalExaminations }, { count: totalStudents }, { data: attempts }, { data: results }, { count: pendingOcrJobs }] = await Promise.all([
+          supabase.from('examinations').select('*', { count: 'exact', head: true }),
+          supabase.from('students').select('*', { count: 'exact', head: true }),
+          supabase.from('examination_attempts').select('status'),
+          supabase.from('examination_results').select('is_qualified'),
+          supabase.from('ocr_jobs').select('*', { count: 'exact', head: true }).in('status', ['uploaded', 'processing', 'queued']),
+        ]);
+
+        const studentsWriting = attempts?.filter((a) => a.status === 'in_progress').length || 0;
+        const totalSubmissions = attempts?.filter((a) => a.status === 'submitted' || a.status === 'timed_out').length || 0;
+        const qualifiedStudents = results?.filter((r) => r.is_qualified).length || 0;
+        const unqualifiedStudents = (results?.length || 0) - qualifiedStudents;
+
+        return {
+          totalExaminations: totalExaminations ?? store.examinations.size,
+          totalStudents: totalStudents ?? store.students.size,
+          studentsWriting,
+          totalSubmissions,
+          qualifiedStudents,
+          unqualifiedStudents,
+          pendingOcrJobs: pendingOcrJobs ?? 0,
+        };
+      } catch {}
+    }
+
     const totalExaminations = store.examinations.size;
     const totalStudents = store.students.size;
     const attempts = Array.from(store.attempts.values());
@@ -2564,27 +2689,150 @@ export const db = {
 
   async getLiveMonitoringData(examId: string) {
     const rounds = await this.getRoundsByExamId(examId);
+    rounds.sort((a, b) => a.round_number - b.round_number);
     const roundIds = new Set(rounds.map((r) => r.id));
+    const roundIdList = Array.from(roundIds);
 
-    const attempts = Array.from(store.attempts.values()).filter((a) => roundIds.has(a.round_id));
-    const results = Array.from(store.results.values()).filter((res) => roundIds.has(res.round_id));
+    const supabase = createAdminClient();
 
-    const monitoringRows = attempts.map((attempt) => {
-      const reg = store.registrations.get(attempt.registration_id);
-      const student = reg ? store.students.get(reg.student_id) : null;
-      const round = store.rounds.get(attempt.round_id);
-      const result = store.results.get(attempt.id);
+    // 1. Load all registered students for this examination
+    const registrations = await this.getRegistrationsByExamId(examId);
+    const regMap = new Map<string, Registration>();
+    for (const reg of registrations) {
+      regMap.set(reg.id, reg);
+      if (reg.student) {
+        store.students.set(reg.student.id, reg.student);
+      }
+    }
+
+    // 2. Fetch all attempts for these rounds from Supabase
+    const attemptsMap = new Map<string, ExaminationAttempt>();
+    if (supabase && roundIdList.length > 0) {
+      try {
+        const { data: dbAttempts } = await supabase
+          .from('examination_attempts')
+          .select('*')
+          .in('round_id', roundIdList);
+
+        if (dbAttempts) {
+          for (const a of dbAttempts) {
+            const attemptObj: ExaminationAttempt = {
+              id: a.id,
+              registration_id: a.registration_id,
+              round_id: a.round_id,
+              started_at: a.started_at,
+              deadline_at: a.deadline_at,
+              submitted_at: a.submitted_at,
+              status: a.status,
+              assigned_question_ids: Array.isArray(a.assigned_question_ids) ? a.assigned_question_ids : [],
+              cheating_warnings: a.cheating_warnings || 0,
+              ip_address: a.ip_address,
+              user_agent: a.user_agent,
+              created_at: a.created_at,
+            };
+            attemptsMap.set(attemptObj.id, attemptObj);
+            store.attempts.set(attemptObj.id, attemptObj);
+          }
+        }
+      } catch (err) {
+        console.warn('[getLiveMonitoringData] Failed to fetch attempts from Supabase:', err);
+      }
+    }
+
+    // Merge in-memory attempts
+    for (const a of store.attempts.values()) {
+      if (roundIds.has(a.round_id)) {
+        attemptsMap.set(a.id, a);
+      }
+    }
+
+    // 3. Fetch all examination results from Supabase
+    const resultsMap = new Map<string, ExaminationResult>();
+    if (supabase && roundIdList.length > 0) {
+      try {
+        const { data: dbResults } = await supabase
+          .from('examination_results')
+          .select('*')
+          .in('round_id', roundIdList);
+
+        if (dbResults) {
+          for (const res of dbResults) {
+            const resObj: ExaminationResult = {
+              id: res.id,
+              attempt_id: res.attempt_id,
+              registration_id: res.registration_id,
+              round_id: res.round_id,
+              score: res.score,
+              total_marks: res.total_marks,
+              qualifying_marks: res.qualifying_marks,
+              is_qualified: res.is_qualified,
+              correct_count: res.correct_count,
+              wrong_count: res.wrong_count,
+              unanswered_count: res.unanswered_count,
+              evaluated_at: res.evaluated_at,
+            };
+            resultsMap.set(resObj.attempt_id, resObj);
+            store.results.set(resObj.attempt_id, resObj);
+          }
+        }
+      } catch (err) {
+        console.warn('[getLiveMonitoringData] Failed to fetch results from Supabase:', err);
+      }
+    }
+
+    // Merge in-memory results
+    for (const res of store.results.values()) {
+      if (roundIds.has(res.round_id)) {
+        resultsMap.set(res.attempt_id, res);
+      }
+    }
+
+    // 4. Fetch latest code snippets for coding rounds if needed
+    const codeSnippetMap = new Map<string, { snippet: string; language: string }>();
+    if (supabase && attemptsMap.size > 0) {
+      try {
+        const attemptIds = Array.from(attemptsMap.keys());
+        const { data: codeAnswers } = await supabase
+          .from('attempt_answers')
+          .select('attempt_id, code_snippet, code_language')
+          .in('attempt_id', attemptIds)
+          .not('code_snippet', 'is', null);
+
+        if (codeAnswers) {
+          for (const ans of codeAnswers) {
+            if (ans.code_snippet && !codeSnippetMap.has(ans.attempt_id)) {
+              codeSnippetMap.set(ans.attempt_id, {
+                snippet: ans.code_snippet,
+                language: ans.code_language || 'python',
+              });
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const monitoringRows: any[] = [];
+    const seenRegIdsWithAttempts = new Set<string>();
+
+    for (const attempt of attemptsMap.values()) {
+      seenRegIdsWithAttempts.add(attempt.registration_id);
+      const reg = regMap.get(attempt.registration_id) || store.registrations.get(attempt.registration_id);
+      const student = reg?.student || (reg ? store.students.get(reg.student_id) : null);
+      const round = rounds.find((r) => r.id === attempt.round_id) || store.rounds.get(attempt.round_id);
+      const result = resultsMap.get(attempt.id);
 
       // Find code answer if coding round
-      let codeSnippet: string | null = null;
-      let codeLanguage: string | null = null;
-      for (const qId of attempt.assigned_question_ids) {
-        const key = `${attempt.id}_${qId}`;
-        const ans = store.answers.get(key);
-        if (ans?.code_snippet) {
-          codeSnippet = ans.code_snippet;
-          codeLanguage = ans.code_language || 'python';
-          break;
+      let codeSnippet: string | null = codeSnippetMap.get(attempt.id)?.snippet || null;
+      let codeLanguage: string | null = codeSnippetMap.get(attempt.id)?.language || null;
+      if (!codeSnippet && attempt.assigned_question_ids) {
+        for (const qId of attempt.assigned_question_ids) {
+          const key = `${attempt.id}_${qId}`;
+          const ans = store.answers.get(key);
+          if (ans?.code_snippet) {
+            codeSnippet = ans.code_snippet;
+            codeLanguage = ans.code_language || 'python';
+            break;
+          }
         }
       }
 
@@ -2593,12 +2841,12 @@ export const db = {
       const deadline = new Date(attempt.deadline_at).getTime();
       const secondsRemaining = attempt.status === 'in_progress' ? Math.max(0, Math.floor((deadline - now) / 1000)) : 0;
 
-      return {
+      monitoringRows.push({
         attemptId: attempt.id,
         registrationId: attempt.registration_id,
-        studentName: student?.full_name || 'Unknown',
-        rollNumber: student?.roll_number || 'N/A',
-        loginId: student?.login_id || student?.roll_number || 'N/A',
+        studentName: student?.full_name || reg?.login_id || 'Candidate',
+        rollNumber: student?.roll_number || reg?.login_id || 'N/A',
+        loginId: reg?.login_id || student?.login_id || student?.roll_number || 'N/A',
         email: student?.email || 'N/A',
         attributes: student?.attributes || {},
         roundId: attempt.round_id,
@@ -2606,7 +2854,7 @@ export const db = {
         roundNumber: round?.round_number || 1,
         roundType: round?.round_type || 'mcq',
         attemptStatus: attempt.status,
-        cheatingWarnings: attempt.cheating_warnings,
+        cheatingWarnings: attempt.cheating_warnings || 0,
         score: result?.score ?? null,
         totalMarks: round?.total_marks ?? 0,
         qualifyingMarks: round?.qualifying_marks ?? 0,
@@ -2616,13 +2864,45 @@ export const db = {
         secondsRemaining,
         startedAt: attempt.started_at,
         submittedAt: attempt.submitted_at,
-      };
-    });
+      });
+    }
+
+    // 5. For registered candidates who haven't started an attempt yet, include them in the telemetry!
+    const firstRound = rounds[0];
+    for (const reg of registrations) {
+      if (!seenRegIdsWithAttempts.has(reg.id)) {
+        const student = reg.student || store.students.get(reg.student_id);
+        monitoringRows.push({
+          attemptId: `reg-${reg.id}`,
+          registrationId: reg.id,
+          studentName: student?.full_name || reg.login_id || 'Candidate',
+          rollNumber: student?.roll_number || reg.login_id || 'N/A',
+          loginId: reg.login_id || student?.login_id || student?.roll_number || 'N/A',
+          email: student?.email || 'N/A',
+          attributes: student?.attributes || {},
+          roundId: firstRound?.id || '',
+          roundName: firstRound?.name || 'Round 1',
+          roundNumber: firstRound?.round_number || 1,
+          roundType: firstRound?.round_type || 'mcq',
+          attemptStatus: 'registered',
+          cheatingWarnings: 0,
+          score: null,
+          totalMarks: firstRound?.total_marks ?? 0,
+          qualifyingMarks: firstRound?.qualifying_marks ?? 0,
+          isQualified: null,
+          codeSnippet: null,
+          codeLanguage: null,
+          secondsRemaining: 0,
+          startedAt: reg.registered_at || new Date().toISOString(),
+          submittedAt: null,
+        });
+      }
+    }
 
     // Compute round-by-round statistics
     const roundSummaries = rounds.map((r) => {
       const roundAttempts = monitoringRows.filter((row) => row.roundId === r.id);
-      const appeared = roundAttempts.length;
+      const appeared = roundAttempts.filter((row) => row.attemptStatus !== 'registered').length;
       const passed = roundAttempts.filter((row) => row.isQualified === true).length;
       const failed = roundAttempts.filter((row) => row.isQualified === false).length;
       const inProgress = roundAttempts.filter((row) => row.attemptStatus === 'in_progress').length;
@@ -2640,51 +2920,112 @@ export const db = {
       };
     });
 
+    const activeAttempts = Array.from(attemptsMap.values());
+    const activeResults = Array.from(resultsMap.values());
+
     return {
       rounds,
       rows: monitoringRows,
       roundSummaries,
       summary: {
-        totalWriting: attempts.filter((a) => a.status === 'in_progress').length,
-        totalSubmitted: results.length,
-        totalQualified: results.filter((r) => r.is_qualified).length,
+        totalWriting: activeAttempts.filter((a) => a.status === 'in_progress').length,
+        totalSubmitted: activeResults.length,
+        totalQualified: activeResults.filter((r) => r.is_qualified).length,
       },
     };
   },
 
   // ON-DEMAND DETAILED CANDIDATE DOSSIER (MULTI-ROUND QUESTION & CODE BREAKDOWN)
   async getStudentDetailedRecord(examId: string, registrationId: string) {
-    let reg = store.registrations.get(registrationId);
-    if (!reg) {
-      // Lookup by student_id or login_id if not direct match
-      reg = Array.from(store.registrations.values()).find(
-        (r) => r.examination_id === examId && (r.id === registrationId || r.student_id === registrationId || r.login_id === registrationId)
-      );
+    const supabase = createAdminClient();
+    const registrations = await this.getRegistrationsByExamId(examId);
+    let reg = registrations.find(
+      (r) => r.id === registrationId || r.student_id === registrationId || r.login_id === registrationId
+    ) || store.registrations.get(registrationId);
+
+    if (!reg && supabase) {
+      try {
+        const { data } = await supabase
+          .from('registrations')
+          .select('*, student:students(*)')
+          .or(`id.eq.${registrationId},student_id.eq.${registrationId},login_id.eq.${registrationId}`)
+          .maybeSingle();
+        if (data) reg = data as any;
+      } catch {}
     }
     if (!reg) throw new Error('Registration record not found');
-    const student = store.students.get(reg.student_id);
+    const student = reg.student || store.students.get(reg.student_id);
 
     const rounds = await this.getRoundsByExamId(examId);
+    rounds.sort((a, b) => a.round_number - b.round_number);
     const roundProgression: any[] = [];
 
+    // Fetch attempts for this registration from Supabase
+    let regAttempts: ExaminationAttempt[] = [];
+    if (supabase) {
+      try {
+        const { data: attData } = await supabase
+          .from('examination_attempts')
+          .select('*')
+          .eq('registration_id', reg.id);
+        if (attData) regAttempts = attData as any;
+      } catch {}
+    }
+    for (const a of store.attempts.values()) {
+      if (a.registration_id === reg.id && !regAttempts.some((ra) => ra.id === a.id)) {
+        regAttempts.push(a);
+      }
+    }
+
+    // Fetch results for this registration from Supabase
+    let regResults: ExaminationResult[] = [];
+    if (supabase) {
+      try {
+        const { data: resData } = await supabase
+          .from('examination_results')
+          .select('*')
+          .eq('registration_id', reg.id);
+        if (resData) regResults = resData as any;
+      } catch {}
+    }
+    for (const res of store.results.values()) {
+      if (res.registration_id === reg.id && !regResults.some((rr) => rr.id === res.id)) {
+        regResults.push(res);
+      }
+    }
+
+    // Fetch all answers for these attempts from Supabase
+    const allAttemptIds = regAttempts.map((a) => a.id);
+    let regAnswers: any[] = [];
+    if (supabase && allAttemptIds.length > 0) {
+      try {
+        const { data: ansData } = await supabase
+          .from('attempt_answers')
+          .select('*')
+          .in('attempt_id', allAttemptIds);
+        if (ansData) regAnswers = ansData;
+      } catch {}
+    }
+
     for (const round of rounds) {
-      const attempt = Array.from(store.attempts.values()).find(
-        (a) => a.registration_id === reg!.id && a.round_id === round.id
-      );
-      const result = attempt ? store.results.get(attempt.id) : null;
+      const attempt = regAttempts.find((a) => a.round_id === round.id);
+      const result = attempt ? (regResults.find((r) => r.attempt_id === attempt.id) || store.results.get(attempt.id) || null) : null;
       const qualification = store.qualifications.get(`${reg.id}_${round.id}`);
+
+      // Ensure questions for this round are loaded
+      let roundQuestions = await this.getQuestionsByRoundId(round.id);
 
       const questionDetails: any[] = [];
       let answeredCount = 0;
       let correctCount = 0;
       let wrongCount = 0;
 
-      if (attempt && Array.isArray(attempt.assigned_question_ids)) {
+      if (attempt && Array.isArray(attempt.assigned_question_ids) && attempt.assigned_question_ids.length > 0) {
         for (let i = 0; i < attempt.assigned_question_ids.length; i++) {
           const qId = attempt.assigned_question_ids[i];
-          const q = store.questions.get(qId);
+          const q = store.questions.get(qId) || roundQuestions.find((rq) => rq.id === qId);
           const ansKey = store.answerKeys.get(qId);
-          const answer = store.answers.get(`${attempt.id}_${qId}`);
+          const answer = regAnswers.find((a) => a.attempt_id === attempt.id && a.question_id === qId) || store.answers.get(`${attempt.id}_${qId}`);
 
           if (q) {
             const isCoding = round.round_type === 'coding' || q.question_type === 'coding';
@@ -2703,7 +3044,7 @@ export const db = {
               const correct = ansKey?.correct_option_label;
               if (selected) {
                 answeredCount++;
-                if (correct && selected.toUpperCase() === correct.toUpperCase()) {
+                if (correct && selected.trim().toUpperCase() === correct.trim().toUpperCase()) {
                   isCorrect = true;
                   correctCount++;
                   earnedMarks = round.marks_per_question;
@@ -2736,7 +3077,7 @@ export const db = {
         }
       }
 
-      const totalQuestionsCount = attempt ? attempt.assigned_question_ids.length : round.total_questions;
+      const totalQuestionsCount = attempt && attempt.assigned_question_ids.length > 0 ? attempt.assigned_question_ids.length : round.total_questions;
 
       roundProgression.push({
         roundId: round.id,
@@ -2779,8 +3120,8 @@ export const db = {
     return {
       registrationId: reg.id,
       studentId: student?.id,
-      studentName: student?.full_name || 'Candidate',
-      rollNumber: student?.roll_number || 'N/A',
+      studentName: student?.full_name || reg.login_id || 'Candidate',
+      rollNumber: student?.roll_number || reg.login_id || 'N/A',
       loginId: reg.login_id || student?.roll_number || 'N/A',
       email: student?.email || 'N/A',
       attributes: student?.attributes || {},
@@ -2796,16 +3137,41 @@ export const db = {
         (r) => r.id === registrationId || r.student_id === registrationId || r.login_id === registrationId
       );
     }
+    const supabase = createAdminClient();
+    if (!reg && supabase) {
+      try {
+        const { data } = await supabase
+          .from('registrations')
+          .select('*, student:students(*)')
+          .or(`id.eq.${registrationId},student_id.eq.${registrationId},login_id.eq.${registrationId}`)
+          .maybeSingle();
+        if (data) reg = data as any;
+      } catch {}
+    }
     if (!reg) throw new Error('Registration not found');
 
-    const attempt = Array.from(store.attempts.values()).find(
+    let attempt = Array.from(store.attempts.values()).find(
       (a) => a.registration_id === reg!.id && a.round_id === roundId
     );
+    if (!attempt && supabase) {
+      try {
+        const { data: attData } = await supabase
+          .from('examination_attempts')
+          .select('*')
+          .eq('registration_id', reg.id)
+          .eq('round_id', roundId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (attData) attempt = attData as any;
+      } catch {}
+    }
+
     if (!attempt) {
       throw new Error('No existing attempt found for this candidate in this round.');
     }
 
-    const round = store.rounds.get(roundId);
+    const round = store.rounds.get(roundId) || (await this.getRoundById(roundId));
 
     // 1. Remove past attempt and result
     const oldAttemptId = attempt.id;
@@ -2814,15 +3180,18 @@ export const db = {
     const regRoundKey = `${reg.id}_${roundId}`;
     if (store.attemptByRegAndRound) store.attemptByRegAndRound.delete(regRoundKey);
 
-    const supabase = createAdminClient();
     if (supabase) {
       try {
-        await supabase.from('examination_attempts').delete().eq('id', oldAttemptId);
+        // delete child answers first to avoid FK violation
+        await supabase.from('attempt_answers').delete().eq('attempt_id', oldAttemptId);
         await supabase.from('examination_results').delete().eq('attempt_id', oldAttemptId);
-      } catch {}
+        await supabase.from('examination_attempts').delete().eq('id', oldAttemptId);
+      } catch (err) {
+        console.warn('[reconductRoundAttempt] Supabase delete error:', err);
+      }
     }
 
-    // 2. Clear stored answers for this attempt
+    // 2. Clear stored answers for this attempt in memory
     for (const key of Array.from(store.answers.keys())) {
       if (key.startsWith(`${oldAttemptId}_`)) {
         store.answers.delete(key);
@@ -2836,13 +3205,18 @@ export const db = {
     // 4. Update registration status back to 'registered'
     reg.status = 'registered';
     store.registrations.set(reg.id, reg);
+    if (supabase) {
+      try {
+        await supabase.from('registrations').update({ status: 'registered' }).eq('id', reg.id);
+      } catch {}
+    }
 
     // 5. Persist to WAL and schedule snapshot
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
     return {
       success: true,
-      message: `Round ${round?.round_number || 3} has been reset for this candidate. Candidate is now permitted to enter and reconduct the round.`,
+      message: `Round ${round?.round_number ?? ''} attempt has been reset for ${reg.login_id || 'candidate'}. They can now retake this round.`,
     };
   },
 

@@ -47,7 +47,7 @@ interface MonitoringRow {
   roundName: string;
   roundNumber: number;
   roundType: 'mcq' | 'coding' | 'hybrid';
-  attemptStatus: 'in_progress' | 'submitted' | 'timed_out' | 'terminated';
+  attemptStatus: 'in_progress' | 'submitted' | 'timed_out' | 'terminated' | 'registered';
   cheatingWarnings: number;
   score: number | null;
   totalMarks: number;
@@ -108,13 +108,16 @@ function AdminLiveResultsContent() {
 
   const fetchResults = async (silent = false) => {
     try {
-      if (!silent) setLoading(true);
+      if (!silent && !monitoringData) setLoading(true);
       else setRefreshing(true);
 
       const res = await fetch(`/api/examinations/${examId}/results`);
       const json = await res.json();
       if (json.success && json.data) {
         setMonitoringData(json.data);
+        try {
+          localStorage.setItem(`mentneo_live_results_${examId}`, JSON.stringify(json.data));
+        } catch {}
       }
     } catch {
       toast.error('Failed to load live examination telemetry');
@@ -173,6 +176,20 @@ function AdminLiveResultsContent() {
       setReconducting(false);
     }
   };
+
+  // Hydrate from localStorage first so page refresh never flickers to 0
+  React.useEffect(() => {
+    try {
+      const cached = localStorage.getItem(`mentneo_live_results_${examId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+          setMonitoringData(parsed);
+          setLoading(false);
+        }
+      }
+    } catch {}
+  }, [examId]);
 
   React.useEffect(() => {
     fetchResults();
@@ -266,34 +283,36 @@ function AdminLiveResultsContent() {
   // Calculate dynamic summary for the selected view
   const currentSummary = React.useMemo(() => {
     if (activeTab === 'all') {
+      const activeRows = rows.filter((r) => r.attemptStatus !== 'registered');
       return {
-        appeared: rows.length,
+        appeared: activeRows.length || rows.length,
         passed: rows.filter((r) => r.isQualified === true).length,
         failed: rows.filter((r) => r.isQualified === false).length,
         inProgress: rows.filter((r) => r.attemptStatus === 'in_progress').length,
-        passPercentage: rows.length > 0 ? Math.round((rows.filter((r) => r.isQualified === true).length / rows.length) * 100) : 0,
+        passPercentage: activeRows.length > 0 ? Math.round((rows.filter((r) => r.isQualified === true).length / activeRows.length) * 100) : 0,
       };
     } else if (activeTab === 'rankings' || activeTab === 'students') {
       const qualified = currentTabRows.filter((r) => r.isQualified === true).length;
+      const activeTabRows = currentTabRows.filter((r) => r.attemptStatus !== 'registered');
       return {
-        appeared: currentTabRows.length,
+        appeared: activeTabRows.length || currentTabRows.length,
         passed: qualified,
-        failed: currentTabRows.length - qualified,
+        failed: activeTabRows.length - qualified,
         inProgress: currentTabRows.filter((r) => r.attemptStatus === 'in_progress').length,
-        passPercentage: currentTabRows.length > 0 ? Math.round((qualified / currentTabRows.length) * 100) : 0,
+        passPercentage: activeTabRows.length > 0 ? Math.round((qualified / activeTabRows.length) * 100) : 0,
       };
     } else {
       const roundNum = parseInt(activeTab, 10);
       const s = roundSummaries.find((sum) => sum.roundNumber === roundNum);
-      if (s) return s;
       const roundRows = rows.filter((r) => r.roundNumber === roundNum);
+      const activeRoundRows = roundRows.filter((r) => r.attemptStatus !== 'registered');
       const passed = roundRows.filter((r) => r.isQualified === true).length;
       return {
-        appeared: roundRows.length,
-        passed,
-        failed: roundRows.filter((r) => r.isQualified === false).length,
-        inProgress: roundRows.filter((r) => r.attemptStatus === 'in_progress').length,
-        passPercentage: roundRows.length > 0 ? Math.round((passed / roundRows.length) * 100) : 0,
+        appeared: s?.appeared || activeRoundRows.length || roundRows.length,
+        passed: s?.passed ?? passed,
+        failed: s?.failed ?? roundRows.filter((r) => r.isQualified === false).length,
+        inProgress: s?.inProgress ?? roundRows.filter((r) => r.attemptStatus === 'in_progress').length,
+        passPercentage: s?.passPercentage ?? (activeRoundRows.length > 0 ? Math.round((passed / activeRoundRows.length) * 100) : 0),
       };
     }
   }, [activeTab, rows, currentTabRows, roundSummaries]);
@@ -850,6 +869,7 @@ function AdminLiveResultsContent() {
                       submitted: 'success',
                       timed_out: 'neutral',
                       terminated: 'danger',
+                      registered: 'neutral',
                     }[r.attemptStatus as string] as 'warning' | 'success' | 'neutral' | 'danger';
 
                     const isTopRank = index < 3 && r.isQualified === true;
@@ -904,7 +924,9 @@ function AdminLiveResultsContent() {
                         </td>
 
                         <td className="py-4 px-4">
-                          <Badge variant={statusVariant}>{r.attemptStatus}</Badge>
+                          <Badge variant={statusVariant}>
+                            {r.attemptStatus === 'registered' ? 'Registered' : r.attemptStatus}
+                          </Badge>
                         </td>
 
                         <td className="py-4 px-4 font-mono font-medium text-gray-700">
@@ -913,6 +935,8 @@ function AdminLiveResultsContent() {
                               <Clock className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
                               {formatTimeRemaining(r.secondsRemaining)}
                             </span>
+                          ) : r.attemptStatus === 'registered' ? (
+                            <span className="text-gray-400 text-[11px]">Not Started</span>
                           ) : r.submittedAt ? (
                             <span className="text-gray-500 text-[11px]">
                               {new Date(r.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -974,7 +998,14 @@ function AdminLiveResultsContent() {
 
                         <td className="py-4 px-6 text-right">
                           {r.isQualified === null ? (
-                            <span className="text-gray-400 text-[11px]">Evaluating</span>
+                            r.attemptStatus === 'registered' ? (
+                              <span className="text-gray-400 text-[11px]">Pending</span>
+                            ) : (
+                              <span className="text-amber-600 font-semibold text-[11px] flex items-center justify-end gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                Writing
+                              </span>
+                            )
                           ) : r.isQualified ? (
                             <span className="inline-flex items-center gap-1 font-semibold text-emerald-700">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
