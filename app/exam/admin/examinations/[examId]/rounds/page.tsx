@@ -84,19 +84,15 @@ function AdminRoundsConfigContent() {
         roundsList = localExam.rounds;
       }
 
-      // Enrich with local question bank counts if present
+      // Authoritative question pool count from server (clean up any stale client cache)
       if (typeof window !== 'undefined') {
         roundsList = roundsList.map((r) => {
-          let poolCount = r.question_pool_count || 0;
-          try {
-            const qRaw = localStorage.getItem(`mentneo_questions_${r.id}`);
-            if (qRaw) {
-              const qList = JSON.parse(qRaw);
-              if (Array.isArray(qList) && qList.length > 0) {
-                poolCount = Math.max(poolCount, qList.length);
-              }
-            }
-          } catch {}
+          const poolCount = Number(r.question_pool_count) || 0;
+          if (poolCount === 0) {
+            try {
+              localStorage.removeItem(`mentneo_questions_${r.id}`);
+            } catch {}
+          }
           return { ...r, question_pool_count: poolCount };
         });
       }

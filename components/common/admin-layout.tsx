@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AdminPinGate } from '@/components/admin/admin-pin-gate';
+import { SystemClockTelemetry } from '@/components/common/system-clock-telemetry';
 import { toast } from 'sonner';
 
 export function AdminLayoutWrapper({ children }: { children: React.ReactNode }) {
@@ -184,15 +185,17 @@ export function AdminLayoutWrapper({ children }: { children: React.ReactNode }) 
           </nav>
 
           <div className="flex items-center gap-3 shrink-0">
+            <SystemClockTelemetry />
+
             <button
               onClick={handleLockConsole}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-gray-200 text-xs font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors uppercase tracking-wider cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors uppercase tracking-wider cursor-pointer font-mono"
             >
               <LogOut className="w-3 h-3 text-gray-400" />
               <span>Lock</span>
             </button>
 
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider font-mono">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               PIN Authenticated
             </span>

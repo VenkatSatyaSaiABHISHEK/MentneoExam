@@ -20,6 +20,8 @@ import {
   Lock,
   Sparkles,
   Check,
+  CheckCheck,
+  Database,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -27,6 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog } from '@/components/ui/dialog';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { CodingSandbox } from '@/components/exam/coding-sandbox';
+import { SystemClockTelemetry } from '@/components/common/system-clock-telemetry';
 import { formatTimeRemaining, cn } from '@/lib/utils';
 import { Question, ExaminationAttempt, AttemptAnswer, Student, ExaminationRound } from '@/types';
 import { offlineSync, QueuedAnswer } from '@/lib/exam/offline-sync';
@@ -53,6 +56,8 @@ function ExaminationEngineContent() {
 
   // High-Concurrency Answer Batching & Offline Sync State
   const [syncStatus, setSyncStatus] = React.useState<'saved' | 'saving' | 'offline'>('saved');
+  const [questionSyncMap, setQuestionSyncMap] = React.useState<Record<string, 'local' | 'synced' | 'saving'>>({});
+  const [confirmedQuestions, setConfirmedQuestions] = React.useState<Record<string, boolean>>({});
   const [pendingCount, setPendingCount] = React.useState<number>(0);
   const pendingBatchRef = React.useRef<Map<string, QueuedAnswer>>(new Map());
   const seqCounterRef = React.useRef<number>(0);
@@ -98,6 +103,19 @@ function ExaminationEngineContent() {
           return;
         }
         setCurrentRound(round);
+
+        // Instant local cache hydration for zero-lag 0ms question load
+        if (typeof window !== 'undefined') {
+          try {
+            const cachedQs = localStorage.getItem(`cached_questions_${round.id}`);
+            if (cachedQs) {
+              const parsedQs = JSON.parse(cachedQs);
+              if (Array.isArray(parsedQs) && parsedQs.length > 0) {
+                setQuestions(parsedQs);
+              }
+            }
+          } catch {}
+        }
 
         // Retrieve registration
         let regId = localStorage.getItem(`exam_reg_${foundExam.id}`);
@@ -157,6 +175,26 @@ function ExaminationEngineContent() {
         setSecondsRemaining(secRem);
         setCurrentWarning(att.cheating_warnings || 0);
         setMaxWarnings(foundExam.max_cheating_warnings || 3);
+
+        // Preload and cache all assigned questions on local device for zero-lag navigation
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(`cached_questions_${round.id}`, JSON.stringify(qs));
+            localStorage.setItem(`attempt_questions_${att.id}`, JSON.stringify(qs));
+            localStorage.setItem(`attempt_answers_${att.id}`, JSON.stringify(savedAns || {}));
+          } catch {}
+        }
+
+        // WhatsApp double-check sync mapping: mark existing answers as synced
+        const initialSyncMap: Record<string, 'local' | 'synced' | 'saving'> = {};
+        if (savedAns) {
+          Object.keys(savedAns).forEach((qid) => {
+            if (savedAns[qid]?.selected_option || savedAns[qid]?.code_snippet) {
+              initialSyncMap[qid] = 'synced';
+            }
+          });
+        }
+        setQuestionSyncMap(initialSyncMap);
 
         // Calculate initial submit lock remaining
         const minSubmitMinutes = round.min_time_before_submit_minutes ?? 1;
@@ -358,6 +396,15 @@ function ExaminationEngineContent() {
         const remaining = await offlineSync.getPendingAnswers(attempt.id);
         setPendingCount(remaining.length);
         setSyncStatus(remaining.length > 0 ? 'offline' : 'saved');
+
+        // WhatsApp-style status: Mark batch questions as synchronized to cloud
+        setQuestionSyncMap((prev) => {
+          const next = { ...prev };
+          for (const it of itemsToSend) {
+            next[it.questionId] = 'synced';
+          }
+          return next;
+        });
       } else {
         setSyncStatus('offline');
         const remaining = await offlineSync.getPendingAnswers(attempt.id);
@@ -393,12 +440,18 @@ function ExaminationEngineContent() {
       setSyncStatus('saving');
       setPendingCount((prev) => prev + 1);
 
+      // WhatsApp-style: Mark locally saved immediately (0ms)
+      setQuestionSyncMap((prev) => ({
+        ...prev,
+        [questionId]: 'local',
+      }));
+
       if (batchTimerRef.current) {
         clearTimeout(batchTimerRef.current);
       }
       batchTimerRef.current = setTimeout(() => {
         flushPendingAnswers();
-      }, 1800);
+      }, 800);
     },
     [attempt, flushPendingAnswers]
   );
@@ -641,37 +694,39 @@ function ExaminationEngineContent() {
             </div>
           </div>
 
-          {/* Quick status pill and submit button */}
+          {/* Quick status pill, Live Telemetry Clock and submit button */}
           <div className="flex items-center gap-3">
+            <SystemClockTelemetry showDatabaseStatus={false} className="hidden lg:inline-flex" />
+
             {isAiAllowed ? (
               <Badge variant="info" size="sm" className="hidden sm:inline-flex gap-1">
                 <Sparkles className="w-3 h-3" />
-                <span>AI / Research Permitted</span>
+                <span>AI Permitted</span>
               </Badge>
             ) : (
               <Badge variant="neutral" size="sm" className="hidden sm:inline-flex gap-1">
                 <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                <span>Proctored Session</span>
+                <span>Proctored</span>
               </Badge>
             )}
 
             {/* High-Concurrency Answer Sync Pill */}
             {syncStatus === 'saving' && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium bg-blue-50 text-blue-700 border border-blue-200">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
-                <span>Saving...</span>
+                <span>Saving to Cloud...</span>
               </span>
             )}
             {syncStatus === 'offline' && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium bg-amber-50 text-amber-800 border border-amber-200">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
-                <span>Offline ({pendingCount} queued)</span>
+                <span>Cached Locally ({pendingCount})</span>
               </span>
             )}
             {syncStatus === 'saved' && (
-              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-gray-400">
-                <Check className="w-3 h-3 text-emerald-600" />
-                <span>Saved</span>
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium text-emerald-700 bg-emerald-50 border border-emerald-200">
+                <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Cloud Synced</span>
               </span>
             )}
 
@@ -826,19 +881,37 @@ function ExaminationEngineContent() {
               /* Standard MCQ Interface */
               <div className="flex-1 flex flex-col">
                 {/* Question Meta Bar */}
-                <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-gray-100 mb-6">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-gray-900 text-white">
                       Q {currentIndex + 1} of {questions.length}
                     </span>
                     <Badge variant="neutral">{currentQuestion.difficulty}</Badge>
-                    <span className="text-xs text-gray-500">
+                    <span className="text-xs text-gray-500 font-mono">
                       +{currentQuestion.marks} / -{currentQuestion.negative_marks} marks
                     </span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {savingAnswer && <span className="text-[11px] text-gray-400 animate-pulse">Saving...</span>}
+                    {/* WhatsApp-style Question Status Indicator */}
+                    {currentAnswer?.selected_option && (
+                      <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono border">
+                        {questionSyncMap[currentQuestion.id] === 'synced' ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50/80 font-semibold">
+                            <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Cloud Synced</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-50 font-medium">
+                            <Check className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Device Saved (0ms)</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {savingAnswer && <span className="text-[11px] text-gray-400 animate-pulse font-mono">Saving...</span>}
+
                     <button
                       onClick={handleToggleMarkReview}
                       className={cn(
@@ -863,46 +936,87 @@ function ExaminationEngineContent() {
                 <div className="mt-8 space-y-3 flex-1">
                   {(currentQuestion.options || []).map((opt) => {
                     const isSelected = currentAnswer?.selected_option === opt.label;
+                    const isSynced = questionSyncMap[currentQuestion.id] === 'synced';
                     return (
                       <button
                         key={opt.id}
                         type="button"
                         onClick={() => handleSelectOption(opt.label)}
                         className={cn(
-                          'w-full flex items-center gap-4 p-4 rounded-xl border text-left transition-all cursor-pointer group',
+                          'w-full flex items-center justify-between gap-4 p-4 rounded-xl border text-left transition-all cursor-pointer group',
                           isSelected
                             ? 'border-gray-900 bg-gray-900 text-white shadow-xs'
                             : 'border-gray-200 bg-white text-gray-800 hover:border-gray-400 hover:bg-gray-50/50'
                         )}
                       >
-                        <span
-                          className={cn(
-                            'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold font-mono shrink-0 transition-colors',
-                            isSelected
-                              ? 'bg-white text-gray-900'
-                              : 'border border-gray-300 bg-gray-50 text-gray-700 group-hover:border-gray-400'
-                          )}
-                        >
-                          {opt.label}
-                        </span>
-                        <span className="text-sm font-medium leading-snug flex-1">{opt.option_text}</span>
+                        <div className="flex items-center gap-4 flex-1">
+                          <span
+                            className={cn(
+                              'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold font-mono shrink-0 transition-colors',
+                              isSelected
+                                ? 'bg-white text-gray-900'
+                                : 'border border-gray-300 bg-gray-50 text-gray-700 group-hover:border-gray-400'
+                            )}
+                          >
+                            {opt.label}
+                          </span>
+                          <span className="text-sm font-medium leading-snug">{opt.option_text}</span>
+                        </div>
+
+                        {isSelected && (
+                          <div className="shrink-0 flex items-center gap-1 font-mono text-xs">
+                            {isSynced ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-300 bg-white/10 px-2 py-0.5 rounded text-[11px] font-semibold">
+                                <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Synced</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-slate-300 bg-white/10 px-2 py-0.5 rounded text-[11px]">
+                                <Check className="w-3.5 h-3.5 text-slate-300" />
+                                <span>Saved</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </button>
                     );
                   })}
                 </div>
 
                 {/* Bottom Navigation */}
-                <div className="mt-8 pt-6 border-t border-gray-100 flex items-center justify-between gap-3">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleClearAnswer}
-                    disabled={!currentAnswer?.selected_option}
-                    className="text-xs text-gray-500 gap-1.5"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Clear Response</span>
-                  </Button>
+                <div className="mt-8 pt-6 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearAnswer}
+                      disabled={!currentAnswer?.selected_option}
+                      className="text-xs text-gray-500 gap-1.5"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Clear Response</span>
+                    </Button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        if (!currentQuestion) return;
+                        setConfirmedQuestions((prev) => ({ ...prev, [currentQuestion.id]: true }));
+                        toast.success(`Question ${currentIndex + 1} choice confirmed & preserved in local storage.`);
+                      }}
+                      disabled={!currentAnswer?.selected_option}
+                      className={cn(
+                        'text-xs font-mono gap-1.5',
+                        confirmedQuestions[currentQuestion?.id]
+                          ? 'text-emerald-700 bg-emerald-50 border-emerald-300'
+                          : 'text-gray-600'
+                      )}
+                    >
+                      <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>{confirmedQuestions[currentQuestion?.id] ? 'Confirmed' : 'Confirm Choice'}</span>
+                    </Button>
+                  </div>
 
                   <div className="flex items-center gap-2">
                     <Button
@@ -989,6 +1103,7 @@ function ExaminationEngineContent() {
                 const isAnswered = Boolean(ans?.selected_option || (ans?.code_snippet && ans.code_snippet.trim().length > 10));
                 const isMarked = Boolean(ans?.is_marked_for_review);
                 const isCurrent = idx === currentIndex;
+                const isSynced = questionSyncMap[q.id] === 'synced';
 
                 let btnStyle = 'border-gray-200 bg-white text-gray-700 hover:border-gray-400';
                 if (isMarked) {
@@ -1002,12 +1117,21 @@ function ExaminationEngineContent() {
                     key={q.id}
                     onClick={() => setCurrentIndex(idx)}
                     className={cn(
-                      'h-9 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
+                      'relative h-9 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
                       btnStyle,
                       isCurrent && 'ring-2 ring-blue-500 ring-offset-1 font-bold'
                     )}
                   >
-                    {idx + 1}
+                    <span>{idx + 1}</span>
+                    {isAnswered && (
+                      <span
+                        className={cn(
+                          'absolute top-1 right-1 w-1.5 h-1.5 rounded-full',
+                          isSynced ? 'bg-emerald-400' : 'bg-slate-300'
+                        )}
+                        title={isSynced ? 'Cloud Synced' : 'Saved to Device'}
+                      />
+                    )}
                   </button>
                 );
               })}
@@ -1049,6 +1173,7 @@ function ExaminationEngineContent() {
                 const isAnswered = Boolean(ans?.selected_option || (ans?.code_snippet && ans.code_snippet.trim().length > 10));
                 const isMarked = Boolean(ans?.is_marked_for_review);
                 const isCurrent = idx === currentIndex;
+                const isSynced = questionSyncMap[q.id] === 'synced';
 
                 let btnStyle = 'border-gray-200 bg-white text-gray-700';
                 if (isMarked) {
@@ -1065,12 +1190,20 @@ function ExaminationEngineContent() {
                       setMobilePaletteOpen(false);
                     }}
                     className={cn(
-                      'h-11 rounded-lg border text-xs font-mono flex items-center justify-center',
+                      'relative h-11 rounded-lg border text-xs font-mono flex items-center justify-center',
                       btnStyle,
                       isCurrent && 'ring-2 ring-blue-500'
                     )}
                   >
-                    {idx + 1}
+                    <span>{idx + 1}</span>
+                    {isAnswered && (
+                      <span
+                        className={cn(
+                          'absolute top-1 right-1 w-1.5 h-1.5 rounded-full',
+                          isSynced ? 'bg-emerald-400' : 'bg-slate-300'
+                        )}
+                      />
+                    )}
                   </button>
                 );
               })}

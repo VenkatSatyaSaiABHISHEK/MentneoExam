@@ -270,23 +270,14 @@ function RoundQuestionsContent() {
       const qJson = await qRes.json();
       let roundQuestions: Question[] = [];
 
-      if (qJson.success && Array.isArray(qJson.data) && qJson.data.length > 0) {
+      if (qJson.success && Array.isArray(qJson.data)) {
         roundQuestions = qJson.data;
-      } else if (localStoredQuestions.length > 0) {
-        roundQuestions = localStoredQuestions;
-        // Sync local questions back to this lambda instance in background
-        roundQuestions.forEach((q) => {
-          fetch('/api/questions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(q),
-          }).catch(() => {});
-        });
-      }
-
-      // Safeguard: NEVER overwrite non-empty local cache with empty server response
-      if (roundQuestions.length === 0 && localStoredQuestions.length > 0) {
-        roundQuestions = localStoredQuestions;
+        if (roundQuestions.length === 0 && typeof window !== 'undefined') {
+          // Purge stale local cache if server questions were cleared
+          try {
+            localStorage.removeItem(`mentneo_questions_${roundId}`);
+          } catch {}
+        }
       }
 
       setQuestions(roundQuestions);
