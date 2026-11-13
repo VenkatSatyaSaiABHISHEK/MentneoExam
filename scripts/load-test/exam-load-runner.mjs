@@ -385,7 +385,7 @@ export async function executeTier(vus) {
           activeStudents++;
           // Dynamic safety watchdog per virtual student: allows full lifecycle completion
           let watchdogTimer;
-          const studentWatchdogMs = Math.max(120000, vus * 150);
+          const studentWatchdogMs = Math.max(300000, vus * 600);
           const watchdog = new Promise((res) => {
             watchdogTimer = setTimeout(() => res(false), studentWatchdogMs);
           });

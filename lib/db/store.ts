@@ -2533,7 +2533,43 @@ export const db = {
     };
     store.ocrJobs.set(id, job);
 
-    // Simulate asynchronous OCR processing worker steps
+    // Dispatch to bound OCR microservice if OCR_SERVICE_URL is injected
+    if (process.env.OCR_SERVICE_URL) {
+      try {
+        const baseUrl = process.env.OCR_SERVICE_URL.endsWith('/')
+          ? process.env.OCR_SERVICE_URL
+          : `${process.env.OCR_SERVICE_URL}/`;
+        const ocrEndpoint = new URL('jobs/start', baseUrl);
+        const secret = process.env.OCR_SERVICE_SECRET || 'dev-secret';
+
+        fetch(ocrEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-OCR-Secret': secret,
+          },
+          body: JSON.stringify({
+            job_id: job.id,
+            pdf_document_id: job.pdf_document_id,
+            storage_path: `documents/${params.documentName}`,
+            round_id: params.roundId || null,
+          }),
+        })
+          .then(async (res) => {
+            if (res.ok) {
+              job.worker_id = 'worker-ocr-service';
+              store.ocrJobs.set(id, { ...job });
+            }
+          })
+          .catch((err) => {
+            console.warn('[OCR Service] Dispatch to bound service failed, falling back to local simulation:', err);
+          });
+      } catch (err) {
+        console.warn('[OCR Service] Invalid OCR_SERVICE_URL binding:', err);
+      }
+    }
+
+    // Local simulation fallback for offline / development / test execution
     setTimeout(() => {
       job.status = 'processing';
       job.progress_percent = 45;

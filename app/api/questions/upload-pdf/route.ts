@@ -28,7 +28,30 @@ export async function POST(req: Request) {
 export async function GET() {
   try {
     const jobs = await db.getOCRJobs();
-    return NextResponse.json({ success: true, data: jobs });
+
+    // Check bound OCR service health if configured
+    let ocrServiceStatus = 'not_configured';
+    if (process.env.OCR_SERVICE_URL) {
+      try {
+        const baseUrl = process.env.OCR_SERVICE_URL.endsWith('/')
+          ? process.env.OCR_SERVICE_URL
+          : `${process.env.OCR_SERVICE_URL}/`;
+        const healthUrl = new URL('health', baseUrl);
+        const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+        ocrServiceStatus = res.ok ? 'connected' : `status_${res.status}`;
+      } catch {
+        ocrServiceStatus = 'unreachable';
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: jobs,
+      ocrService: {
+        status: ocrServiceStatus,
+        configured: Boolean(process.env.OCR_SERVICE_URL),
+      },
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Server error';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
