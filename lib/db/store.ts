@@ -735,26 +735,52 @@ export const db = {
   },
 
   async deleteRound(examId: string, roundId: string): Promise<boolean> {
+    store.rounds.delete(roundId);
+
     const supabase = createAdminClient();
     if (supabase) {
       try {
         await supabase.from('examination_rounds').delete().eq('id', roundId);
-      } catch {
-        // Fall back to store
+        await supabase.from('question_banks').delete().eq('id', `bank-${roundId}`);
+      } catch (err) {
+        console.warn('[Supabase deleteRound error]', err);
       }
     }
 
-    store.rounds.delete(roundId);
+    // Re-index remaining rounds sequentially (1, 2, 3...) both in memory and Supabase
+    let remaining = Array.from(store.rounds.values()).filter(
+      (r) => r.examination_id === examId && r.id !== roundId
+    );
 
-    // Re-index remaining rounds sequentially (1, 2, 3...)
-    const remaining = Array.from(store.rounds.values())
-      .filter((r) => r.examination_id === examId)
-      .sort((a, b) => a.round_number - b.round_number);
+    if (supabase) {
+      try {
+        const { data } = await supabase
+          .from('examination_rounds')
+          .select('*')
+          .eq('examination_id', examId)
+          .order('round_number', { ascending: true });
+        if (data && data.length > 0) {
+          remaining = data as ExaminationRound[];
+        }
+      } catch {}
+    }
 
-    remaining.forEach((r, idx) => {
-      r.round_number = idx + 1;
+    remaining.sort((a, b) => a.round_number - b.round_number);
+
+    for (let idx = 0; idx < remaining.length; idx++) {
+      const r = remaining[idx];
+      const newNum = idx + 1;
+      r.round_number = newNum;
       store.rounds.set(r.id, r);
-    });
+      if (supabase) {
+        try {
+          await supabase
+            .from('examination_rounds')
+            .update({ round_number: newNum, updated_at: new Date().toISOString() })
+            .eq('id', r.id);
+        } catch {}
+      }
+    }
 
     resilientStorage.flushSync(() => store.toSnapshot());
     return true;

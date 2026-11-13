@@ -16,43 +16,89 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
   let fullText = '';
   const content = buffer.toString('binary');
 
-  // 1. Search for FlateDecode compressed streams
+  // 1. First pass: find and parse all CMap ToUnicode streams for Chromium/Skia PDFs
+  const cmap = new Map<string, string>();
   const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  let streamMatch;
+  let match: RegExpExecArray | null;
 
-  while ((streamMatch = streamRegex.exec(content)) !== null) {
-    const rawStream = Buffer.from(streamMatch[1], 'binary');
+  while ((match = streamRegex.exec(content)) !== null) {
+    try {
+      const rawStream = Buffer.from(match[1], 'binary');
+      const dec = zlib.inflateSync(rawStream).toString('utf-8');
+      if (dec.includes('beginbfchar') || dec.includes('beginbfrange')) {
+        const bfcharRegex = /<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g;
+        let bfc: RegExpExecArray | null;
+        while ((bfc = bfcharRegex.exec(dec)) !== null) {
+          const srcHex = bfc[1].toUpperCase().padStart(4, '0');
+          const dstChar = String.fromCharCode(parseInt(bfc[2], 16));
+          cmap.set(srcHex, dstChar);
+        }
+        const bfrangeRegex = /<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g;
+        let bfr: RegExpExecArray | null;
+        while ((bfr = bfrangeRegex.exec(dec)) !== null) {
+          const start = parseInt(bfr[1], 16);
+          const end = parseInt(bfr[2], 16);
+          const dstStart = parseInt(bfr[3], 16);
+          for (let code = start; code <= end; code++) {
+            const srcHex = code.toString(16).toUpperCase().padStart(4, '0');
+            const dstChar = String.fromCharCode(dstStart + (code - start));
+            cmap.set(srcHex, dstChar);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Second pass: extract text from streams
+  streamRegex.lastIndex = 0;
+  while ((match = streamRegex.exec(content)) !== null) {
+    const rawStream = Buffer.from(match[1], 'binary');
     try {
       const decompressed = zlib.inflateSync(rawStream);
       const decStr = decompressed.toString('utf-8');
 
       // Extract text from (text) Tj operators
       const tjRegex = /\(([^)]+)\)\s*T[jJ]/g;
-      let tj;
+      let tj: RegExpExecArray | null;
       while ((tj = tjRegex.exec(decStr)) !== null) {
         fullText += tj[1] + ' ';
       }
 
       // Extract text from [(text1) 20 (text2)] TJ array operators
       const tjArrayRegex = /\[(.*?)\]\s*TJ/g;
-      let tjArr;
+      let tjArr: RegExpExecArray | null;
       while ((tjArr = tjArrayRegex.exec(decStr)) !== null) {
         const inner = tjArr[1];
         const innerTextRegex = /\(([^)]+)\)/g;
-        let it;
+        let it: RegExpExecArray | null;
         while ((it = innerTextRegex.exec(inner)) !== null) {
           fullText += it[1];
         }
         fullText += ' ';
+      }
+
+      // Extract hexadecimal <hex> Tj decoded with CMap
+      if (cmap.size > 0) {
+        const hexTjRegex = /<([0-9A-Fa-f]+)>\s*T[jJ]/g;
+        let htj: RegExpExecArray | null;
+        while ((htj = hexTjRegex.exec(decStr)) !== null) {
+          const hex = htj[1];
+          let decoded = '';
+          for (let i = 0; i < hex.length; i += 4) {
+            const code = hex.slice(i, i + 4).toUpperCase().padStart(4, '0');
+            decoded += cmap.get(code) || '';
+          }
+          fullText += decoded;
+        }
       }
     } catch {
       // Stream is not flate or is uncompressed image, ignore
     }
   }
 
-  // 2. Also search uncompressed literal text if any
+  // 3. Also search uncompressed literal text if any
   const literalTj = /\(([^)]+)\)\s*T[jJ]/g;
-  let lit;
+  let lit: RegExpExecArray | null;
   while ((lit = literalTj.exec(content)) !== null) {
     fullText += lit[1] + ' ';
   }

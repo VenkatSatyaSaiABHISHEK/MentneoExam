@@ -242,15 +242,6 @@ function RoundQuestionsContent() {
         };
       }
 
-      // Sync local settings to server store so serverless state aligns with user's choices
-      if (localR || resolvedRound) {
-        fetch(`/api/examinations/${examId}/rounds`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(resolvedRound),
-        }).catch(() => {});
-      }
-
       setRound(resolvedRound);
       setQMarks(resolvedRound.marks_per_question ?? 1);
       setQNegativeMarks(resolvedRound.negative_marks ?? 0);

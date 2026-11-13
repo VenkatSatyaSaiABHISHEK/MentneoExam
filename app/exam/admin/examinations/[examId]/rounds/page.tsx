@@ -72,11 +72,19 @@ function AdminRoundsConfigContent() {
       let roundsList: ExaminationRound[] = [];
       if (json.success && Array.isArray(json.data) && json.data.length > 0) {
         roundsList = json.data;
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+            const parsed = stored ? JSON.parse(stored) : { id: examId };
+            parsed.rounds = json.data;
+            localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsed));
+          } catch {}
+        }
       } else if (localExam?.rounds && Array.isArray(localExam.rounds) && localExam.rounds.length > 0) {
         roundsList = localExam.rounds;
       }
 
-      // Enrich with local storage customizations and local question bank counts if present
+      // Enrich with local question bank counts if present
       if (typeof window !== 'undefined') {
         roundsList = roundsList.map((r) => {
           let poolCount = r.question_pool_count || 0;
@@ -89,15 +97,6 @@ function AdminRoundsConfigContent() {
               }
             }
           } catch {}
-
-          if (localExam?.rounds && Array.isArray(localExam.rounds)) {
-            const matched = localExam.rounds.find(
-              (lr: any) => lr.id === r.id || Number(lr.round_number) === Number(r.round_number)
-            );
-            if (matched) {
-              return { ...r, ...matched, question_pool_count: poolCount || matched.question_pool_count || 0 };
-            }
-          }
           return { ...r, question_pool_count: poolCount };
         });
       }
@@ -126,6 +125,7 @@ function AdminRoundsConfigContent() {
     const maxRound = rounds.length > 0 ? Math.max(...rounds.map((r) => r.round_number)) : 0;
     const nextNumber = maxRound + 1;
     const newRound: Partial<ExaminationRound> = {
+      examination_id: examId,
       round_number: nextNumber,
       name: `Round ${nextNumber}: Specialized Evaluation`,
       duration_minutes: 60,
@@ -217,7 +217,20 @@ function AdminRoundsConfigContent() {
       if (data.success) {
         toast.success(`Deleted ${roundToDelete.name}`);
         setRoundToDelete(null);
-        fetchRounds();
+
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              parsed.rounds = (parsed.rounds || []).filter((r: any) => r.id !== roundToDelete.id);
+              localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsed));
+            }
+            localStorage.removeItem(`mentneo_questions_${roundToDelete.id}`);
+          } catch {}
+        }
+
+        await fetchRounds();
       } else {
         toast.error(data.error || 'Failed to delete round');
       }
