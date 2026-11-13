@@ -72,6 +72,23 @@ function ExaminationDetailContent() {
             });
           }
         }
+
+        // Check local storage for registered candidate count
+        if (typeof window !== 'undefined') {
+          try {
+            const storedRegs = localStorage.getItem(`mentneo_students_${examId}`);
+            if (storedRegs) {
+              const parsedRegs = JSON.parse(storedRegs);
+              if (Array.isArray(parsedRegs) && parsedRegs.length > 0) {
+                finalData._count = {
+                  ...(finalData._count || {}),
+                  registrations: Math.max(finalData._count?.registrations || 0, parsedRegs.length),
+                };
+              }
+            }
+          } catch {}
+        }
+
         setExam(finalData);
 
         // Sync local settings to server if server was missing custom data

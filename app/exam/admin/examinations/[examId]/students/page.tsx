@@ -8,6 +8,7 @@ import { AdminLayoutWrapper } from '@/components/common/admin-layout';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Dialog } from '@/components/ui/dialog';
 import {
   ChevronLeft,
@@ -21,6 +22,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Settings2,
+  Plus,
+  UserPlus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Registration, Examination } from '@/types';
@@ -33,6 +36,13 @@ function AdminStudentsContent() {
   const [registrations, setRegistrations] = React.useState<Registration[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [search, setSearch] = React.useState('');
+
+  // Add Single Candidate Modal State
+  const [addModalOpen, setAddModalOpen] = React.useState(false);
+  const [addFullName, setAddFullName] = React.useState('');
+  const [addRollNumber, setAddRollNumber] = React.useState('');
+  const [addEmail, setAddEmail] = React.useState('');
+  const [savingCandidate, setSavingCandidate] = React.useState(false);
 
   // Import Modal State
   const [importModalOpen, setImportModalOpen] = React.useState(false);
@@ -59,6 +69,22 @@ function AdminStudentsContent() {
   const fetchExamAndStudents = async () => {
     try {
       setLoading(true);
+
+      // Check localStorage for cached candidate roster
+      let localRegs: Registration[] = [];
+      if (typeof window !== 'undefined') {
+        try {
+          const stored = localStorage.getItem(`mentneo_students_${examId}`);
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              localRegs = parsed;
+              setRegistrations(parsed);
+            }
+          }
+        } catch {}
+      }
+
       // Fetch exam details
       const examRes = await fetch(`/api/examinations/${examId}`);
       const examJson = await examRes.json();
@@ -71,8 +97,28 @@ function AdminStudentsContent() {
       // Fetch students
       const res = await fetch(`/api/examinations/${examId}/students`);
       const json = await res.json();
-      if (json.success && json.data) {
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
         setRegistrations(json.data);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(json.data));
+          } catch {}
+        }
+      } else if (localRegs.length > 0) {
+        // If serverless container is fresh and returned 0, NEVER overwrite non-empty local roster!
+        setRegistrations(localRegs);
+        // Sync cached candidates to this container in the background
+        localRegs.forEach((r) => {
+          fetch(`/api/examinations/${examId}/students`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fullName: r.student?.full_name || `Candidate ${r.login_id}`,
+              rollNumber: r.login_id,
+              email: r.student?.email,
+            }),
+          }).catch(() => {});
+        });
       }
     } catch {
       toast.error('Failed to load registered candidates.');
@@ -161,6 +207,15 @@ function AdminStudentsContent() {
         return;
       }
 
+      if (Array.isArray(json.registrations) && json.registrations.length > 0) {
+        setRegistrations(json.registrations);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(json.registrations));
+          } catch {}
+        }
+      }
+
       toast.success(`Successfully imported ${json.data.importedCount} candidates into the examination roster.`);
       setImportModalOpen(false);
       setSelectedFile(null);
@@ -173,6 +228,92 @@ function AdminStudentsContent() {
     }
   };
 
+  // Add individual candidate manually
+  const handleAddCandidate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const roll = addRollNumber.trim();
+    if (!roll) {
+      toast.error('Candidate identifier / Roll Number is required.');
+      return;
+    }
+
+    setSavingCandidate(true);
+    try {
+      const res = await fetch(`/api/examinations/${examId}/students`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: addFullName.trim() || `Candidate ${roll}`,
+          rollNumber: roll,
+          email: addEmail.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const newReg: Registration = data.data || {
+          id: `reg-${examId}-${Date.now()}`,
+          examination_id: examId,
+          student_id: data.student?.id || `student-${roll}`,
+          login_id: roll,
+          registered_at: new Date().toISOString(),
+          status: 'registered',
+          student: data.student || {
+            id: `student-${roll}`,
+            full_name: addFullName.trim() || `Candidate ${roll}`,
+            roll_number: roll,
+            login_id: roll,
+            email: addEmail.trim(),
+            created_at: new Date().toISOString(),
+          },
+        };
+
+        const updated = Array.isArray(data.registrations) && data.registrations.length > 0
+          ? data.registrations
+          : [newReg, ...registrations.filter((r) => r.login_id !== roll)];
+
+        setRegistrations(updated);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(updated));
+          } catch {}
+        }
+
+        toast.success(`Candidate ${addFullName.trim() || roll} enrolled in roster.`);
+        setAddModalOpen(false);
+        setAddFullName('');
+        setAddRollNumber('');
+        setAddEmail('');
+      } else {
+        toast.error(data.error || 'Failed to add candidate.');
+      }
+    } catch {
+      toast.error('Network error adding candidate.');
+    } finally {
+      setSavingCandidate(false);
+    }
+  };
+
+  // Remove individual candidate
+  const handleDeleteCandidate = async (regId: string, roll: string) => {
+    if (!confirm(`Are you sure you want to remove candidate "${roll}" from the roster?`)) return;
+
+    try {
+      await fetch(`/api/examinations/${examId}/students?id=${regId}`, {
+        method: 'DELETE',
+      });
+      const updated = registrations.filter((r) => r.id !== regId);
+      setRegistrations(updated);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(updated));
+        } catch {}
+      }
+      toast.success('Candidate removed from roster.');
+    } catch {
+      toast.error('Failed to remove candidate.');
+    }
+  };
+
   // Clear all candidates in this exam's roster
   const handleClearRoster = async () => {
     setClearing(true);
@@ -182,6 +323,12 @@ function AdminStudentsContent() {
       });
       const json = await res.json();
       if (json.success) {
+        setRegistrations([]);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem(`mentneo_students_${examId}`);
+          } catch {}
+        }
         toast.success('Examination roster cleared.');
         setClearModalOpen(false);
         fetchExamAndStudents();
@@ -303,12 +450,22 @@ function AdminStudentsContent() {
 
             <Button
               size="sm"
-              variant="primary"
+              variant="outline"
               onClick={() => setImportModalOpen(true)}
               className="text-xs uppercase tracking-wider font-semibold gap-1.5"
             >
               <Upload className="w-3.5 h-3.5" />
               <span>Import Excel / CSV</span>
+            </Button>
+
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setAddModalOpen(true)}
+              className="text-xs uppercase tracking-wider font-semibold gap-1.5 bg-gray-900 text-white hover:bg-black"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Candidate</span>
             </Button>
           </div>
         </div>
@@ -409,14 +566,25 @@ function AdminStudentsContent() {
                         <p className="text-gray-400 text-[11px]">
                           Upload an Excel (.xlsx) or CSV file with your student details to authorize them for this exam.
                         </p>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setImportModalOpen(true)}
-                          className="mt-3 text-xs uppercase tracking-wider"
-                        >
-                          Import Student Roster
-                        </Button>
+                        <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => setAddModalOpen(true)}
+                            className="text-xs uppercase tracking-wider bg-gray-900 text-white hover:bg-black gap-1.5"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add Candidate Manually</span>
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setImportModalOpen(true)}
+                            className="text-xs uppercase tracking-wider"
+                          >
+                            Import Student Roster
+                          </Button>
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -466,20 +634,37 @@ function AdminStudentsContent() {
                           <Badge variant={statusVariant}>{r.status}</Badge>
                         </td>
                         <td className="py-4 px-6 text-right">
-                          {r.status !== 'disqualified' && (
+                          <div className="flex items-center justify-end gap-1">
+                            {r.status !== 'disqualified' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  r.status = 'disqualified';
+                                  const updated = [...registrations];
+                                  setRegistrations(updated);
+                                  if (typeof window !== 'undefined') {
+                                    try {
+                                      localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(updated));
+                                    } catch {}
+                                  }
+                                  toast.error(`Candidate ${r.login_id || r.student?.roll_number} disqualified.`);
+                                }}
+                                className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 h-7 px-2"
+                              >
+                                Disqualify
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => {
-                                r.status = 'disqualified';
-                                setRegistrations([...registrations]);
-                                toast.error(`Candidate ${r.login_id || r.student?.roll_number} disqualified.`);
-                              }}
-                              className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 h-7 px-2"
+                              onClick={() => handleDeleteCandidate(r.id, r.login_id || r.student?.roll_number || 'Candidate')}
+                              className="text-[11px] text-gray-400 hover:text-rose-600 hover:bg-rose-50 h-7 px-2"
+                              title="Remove candidate from roster"
                             >
-                              Disqualify
+                              <Trash2 className="w-3.5 h-3.5" />
                             </Button>
-                          )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -489,6 +674,76 @@ function AdminStudentsContent() {
             </table>
           </div>
         </div>
+
+        {/* ---------------------------------------------------- */}
+        {/* ADD SINGLE CANDIDATE DIALOG                         */}
+        {/* ---------------------------------------------------- */}
+        <Dialog
+          isOpen={addModalOpen}
+          onClose={() => setAddModalOpen(false)}
+          title="Add Candidate to Examination Roster"
+          description={`Enroll an individual student into this examination roster. The candidate will authenticate using their ${loginLabelDisplay}.`}
+        >
+          <form onSubmit={handleAddCandidate} className="space-y-4 pt-2">
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                {loginLabelDisplay} *
+              </label>
+              <Input
+                value={addRollNumber}
+                onChange={(e) => setAddRollNumber(e.target.value)}
+                placeholder="e.g. 2026CS001, REG-1049, STU-55"
+                required
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Candidate will use this identifier to log in and write their examination.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                Candidate Full Name *
+              </label>
+              <Input
+                value={addFullName}
+                onChange={(e) => setAddFullName(e.target.value)}
+                placeholder="e.g. John Doe"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                Email Address (Optional)
+              </label>
+              <Input
+                type="email"
+                value={addEmail}
+                onChange={(e) => setAddEmail(e.target.value)}
+                placeholder="e.g. student@college.edu"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAddModalOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={savingCandidate || !addRollNumber.trim()}
+                className="bg-gray-900 text-white hover:bg-black text-xs font-semibold uppercase tracking-wider"
+              >
+                {savingCandidate ? 'Saving...' : 'Add Candidate'}
+              </Button>
+            </div>
+          </form>
+        </Dialog>
 
         {/* ---------------------------------------------------- */}
         {/* IMPORT SPREADSHEET DIALOG                           */}

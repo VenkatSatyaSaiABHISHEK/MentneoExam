@@ -47,9 +47,12 @@ export async function POST(
       replaceExisting: Boolean(replaceExisting),
     });
 
+    const registrations = await db.getRegistrationsByExamId(examId);
+
     return NextResponse.json({
       success: true,
       data: result,
+      registrations,
       message: `Successfully imported ${result.importedCount} candidates into the examination roster.`,
     });
   } catch (error: unknown) {
