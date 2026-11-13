@@ -320,3 +320,4 @@ CREATE POLICY "allow_all_cheating" ON public.cheating_events FOR ALL USING (true
 
 DROP POLICY IF EXISTS "allow_all_audit" ON public.examination_audit_logs;
 CREATE POLICY "allow_all_audit" ON public.examination_audit_logs FOR ALL USING (true) WITH CHECK (true);
+
