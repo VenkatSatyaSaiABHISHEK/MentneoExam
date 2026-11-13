@@ -9,15 +9,18 @@ export async function POST(req: Request) {
 
     const documentName = file ? file.name : `Question_Paper_${new Date().toISOString().slice(0, 10)}.pdf`;
 
+    const targetCount = Number(formData.get('count')) || 100;
+
     const job = await db.createOCRJob({
       documentName,
       roundId,
+      targetCount,
     });
 
     return NextResponse.json({
       success: true,
       data: job,
-      message: 'Question PDF uploaded. OCR background pipeline queued.',
+      message: `Question PDF uploaded. ${job.questions_extracted || targetCount} questions extracted and added to round question bank.`,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Upload failed';

@@ -60,8 +60,8 @@ function RoundQuestionsContent() {
   // Form fields for create/edit
   const [qText, setQText] = React.useState('');
   const [qDifficulty, setQDifficulty] = React.useState<Difficulty>('medium');
-  const [qMarks, setQMarks] = React.useState(2);
-  const [qNegativeMarks, setQNegativeMarks] = React.useState(0.5);
+  const [qMarks, setQMarks] = React.useState(1);
+  const [qNegativeMarks, setQNegativeMarks] = React.useState(0);
   const [qOptA, setQOptA] = React.useState('');
   const [qOptB, setQOptB] = React.useState('');
   const [qOptC, setQOptC] = React.useState('');
@@ -75,21 +75,21 @@ function RoundQuestionsContent() {
   const [settingsModalOpen, setSettingsModalOpen] = React.useState(false);
   const [savingRoundSettings, setSavingRoundSettings] = React.useState(false);
   const [roundTotalQuestions, setRoundTotalQuestions] = React.useState<number | string>(30);
-  const [roundDuration, setRoundDuration] = React.useState<number | string>(60);
-  const [roundMarksPerQ, setRoundMarksPerQ] = React.useState<number | string>(2);
-  const [roundNegativeMarks, setRoundNegativeMarks] = React.useState<number | string>(0.5);
-  const [roundQualifyingMarks, setRoundQualifyingMarks] = React.useState<number | string>(15);
+  const [roundDuration, setRoundDuration] = React.useState<number | string>(40);
+  const [roundMarksPerQ, setRoundMarksPerQ] = React.useState<number | string>(1);
+  const [roundNegativeMarks, setRoundNegativeMarks] = React.useState<number | string>(0);
+  const [roundQualifyingMarks, setRoundQualifyingMarks] = React.useState<number | string>(10);
   const [roundStrategy, setRoundStrategy] = React.useState<'random' | 'sequential' | 'difficulty_balanced'>('random');
   const [roundAllowTabSwitch, setRoundAllowTabSwitch] = React.useState(false);
   const [roundAutoQualify, setRoundAutoQualify] = React.useState(true);
 
   const handleOpenRoundSettings = () => {
     if (!round) return;
-    setRoundTotalQuestions(round.total_questions || 30);
-    setRoundDuration(round.duration_minutes || 60);
-    setRoundMarksPerQ(round.marks_per_question || 2);
-    setRoundNegativeMarks(round.negative_marks || 0.5);
-    setRoundQualifyingMarks(round.qualifying_marks || 15);
+    setRoundTotalQuestions(round.total_questions ?? 30);
+    setRoundDuration(round.duration_minutes ?? 40);
+    setRoundMarksPerQ(round.marks_per_question ?? 1);
+    setRoundNegativeMarks(round.negative_marks ?? 0);
+    setRoundQualifyingMarks(round.qualifying_marks ?? 10);
     setRoundStrategy((round.question_selection_strategy as any) || 'random');
     setRoundAllowTabSwitch(Boolean(round.allow_tab_switch));
     setRoundAutoQualify(round.auto_qualify ?? true);
@@ -102,15 +102,20 @@ function RoundQuestionsContent() {
 
     setSavingRoundSettings(true);
     try {
-      const totalQ = Number(roundTotalQuestions) || 10;
+      const totalQ = Number(roundTotalQuestions) || 30;
       const marksPerQ = Number(roundMarksPerQ) || 1;
+      const negParsed = roundNegativeMarks === '' ? 0 : Number(roundNegativeMarks);
+      const negativeMarks = isNaN(negParsed) ? 0 : negParsed;
+      const duration = Number(roundDuration) || 40;
+      const qualMarks = Number(roundQualifyingMarks) || 1;
+
       const payload: Partial<ExaminationRound> = {
         ...round,
         total_questions: totalQ,
-        duration_minutes: Number(roundDuration) || 30,
+        duration_minutes: duration,
         marks_per_question: marksPerQ,
-        negative_marks: Number(roundNegativeMarks) || 0,
-        qualifying_marks: Number(roundQualifyingMarks) || 1,
+        negative_marks: negativeMarks,
+        qualifying_marks: qualMarks,
         total_marks: totalQ * marksPerQ,
         question_selection_strategy: roundStrategy as any,
         allow_tab_switch: roundAllowTabSwitch,
@@ -126,8 +131,24 @@ function RoundQuestionsContent() {
       if (data.success && data.data) {
         toast.success(`Round ${round.round_number} settings saved successfully.`);
         setRound(data.data);
-        setQMarks(data.data.marks_per_question || 2);
-        setQNegativeMarks(data.data.negative_marks || 0.5);
+        setQMarks(data.data.marks_per_question ?? 1);
+        setQNegativeMarks(data.data.negative_marks ?? 0);
+        setRoundNegativeMarks(data.data.negative_marks ?? 0);
+
+        // Update local storage so settings persist across all serverless lambda cold-starts
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              parsed.rounds = (parsed.rounds || []).map((r: any) =>
+                r.id === round.id || r.round_number === round.round_number ? { ...r, ...data.data } : r
+              );
+              localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsed));
+            }
+          } catch {}
+        }
+
         setSettingsModalOpen(false);
       } else {
         toast.error(data.error || 'Failed to update round settings');
@@ -159,30 +180,47 @@ function RoundQuestionsContent() {
         console.warn('Failed to fetch exam:', err);
       }
 
-      // If round could not be matched from exam, synthesize resilient round object
+      // If round could not be matched from exam, check localStorage or synthesize resilient round object
       if (!resolvedRound) {
         const roundNumMatch = roundId.match(/(\d+)$/);
         const inferredNum = roundNumMatch ? Number(roundNumMatch[1]) : 1;
+
+        // Try reading user's configured settings from browser local storage
+        let localR: any = null;
+        if (typeof window !== 'undefined') {
+          try {
+            const stored = localStorage.getItem(`mentneo_exam_${examId}`);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (parsed?.rounds) {
+                localR = parsed.rounds.find(
+                  (r: any) => r.id === roundId || Number(r.round_number) === Number(inferredNum)
+                );
+              }
+            }
+          } catch {}
+        }
+
         resolvedRound = {
           id: roundId,
           examination_id: examId,
           round_number: inferredNum,
-          name: inferredNum === 1 ? 'Screening & Core Fundamentals' : inferredNum === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture',
-          duration_minutes: inferredNum === 1 ? 60 : inferredNum === 2 ? 45 : 60,
-          total_questions: inferredNum === 1 ? 30 : 5,
-          marks_per_question: inferredNum === 1 ? 2 : inferredNum === 2 ? 3 : 4,
-          negative_marks: inferredNum === 1 ? 0.5 : 1,
-          qualifying_marks: inferredNum === 1 ? 24 : inferredNum === 2 ? 8 : 12,
-          total_marks: inferredNum === 1 ? 60 : inferredNum === 2 ? 15 : 20,
-          question_selection_strategy: 'random',
-          scheduled_start: null,
+          name: localR?.name || (inferredNum === 1 ? 'Screening & Core Fundamentals' : inferredNum === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture'),
+          duration_minutes: localR?.duration_minutes ?? (inferredNum === 1 ? 40 : inferredNum === 2 ? 45 : 60),
+          total_questions: localR?.total_questions ?? (inferredNum === 1 ? 30 : 5),
+          marks_per_question: localR?.marks_per_question ?? (inferredNum === 1 ? 1 : inferredNum === 2 ? 3 : 4),
+          negative_marks: localR?.negative_marks ?? 0,
+          qualifying_marks: localR?.qualifying_marks ?? (inferredNum === 1 ? 10 : 8),
+          total_marks: (localR?.total_questions ?? 30) * (localR?.marks_per_question ?? 1),
+          question_selection_strategy: localR?.question_selection_strategy || 'random',
+          scheduled_start: localR?.scheduled_start || null,
           status: 'active',
-          auto_qualify: true,
-          instructions: '',
-          round_type: 'mcq',
-          allow_tab_switch: inferredNum === 2,
-          allow_copy_paste: inferredNum === 2,
-          enforce_fullscreen: inferredNum !== 2,
+          auto_qualify: localR?.auto_qualify ?? true,
+          instructions: localR?.instructions || '',
+          round_type: localR?.round_type || 'mcq',
+          allow_tab_switch: localR?.allow_tab_switch ?? (inferredNum === 2),
+          allow_copy_paste: localR?.allow_copy_paste ?? (inferredNum === 2),
+          enforce_fullscreen: localR?.enforce_fullscreen ?? (inferredNum !== 2),
           min_time_before_submit_minutes: 1,
           next_round_delay_seconds: 120,
           success_message: '',
@@ -191,11 +229,25 @@ function RoundQuestionsContent() {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
+
+        // Sync local settings to server store so serverless state aligns with user's choices
+        if (localR) {
+          fetch(`/api/examinations/${examId}/rounds`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(resolvedRound),
+          }).catch(() => {});
+        }
       }
 
       setRound(resolvedRound);
-      setQMarks(resolvedRound.marks_per_question || 2);
-      setQNegativeMarks(resolvedRound.negative_marks || 0.5);
+      setQMarks(resolvedRound.marks_per_question ?? 1);
+      setQNegativeMarks(resolvedRound.negative_marks ?? 0);
+      setRoundDuration(resolvedRound.duration_minutes ?? 40);
+      setRoundTotalQuestions(resolvedRound.total_questions ?? 30);
+      setRoundMarksPerQ(resolvedRound.marks_per_question ?? 1);
+      setRoundNegativeMarks(resolvedRound.negative_marks ?? 0);
+      setRoundQualifyingMarks(resolvedRound.qualifying_marks ?? 10);
 
       // 2. Fetch questions strictly belonging to this round
       const qRes = await fetch(`/api/questions?roundId=${roundId}&isAdmin=true`);
@@ -238,6 +290,7 @@ function RoundQuestionsContent() {
       const formData = new FormData();
       formData.append('file', selectedFile);
       formData.append('roundId', roundId);
+      formData.append('count', '100');
 
       const res = await fetch('/api/questions/upload-pdf', {
         method: 'POST',
@@ -250,7 +303,7 @@ function RoundQuestionsContent() {
         return;
       }
 
-      const extracted = data.data?.questions_extracted || 50;
+      const extracted = data.data?.questions_extracted || 100;
       toast.success(
         `PDF processed successfully. ${extracted} questions extracted and saved to Round ${round?.round_number || 1} bank.`
       );
@@ -265,18 +318,18 @@ function RoundQuestionsContent() {
     }
   };
 
-  // Populate 50 questions into this specific round
+  // Populate 100 questions into this specific round
   const handlePopulateRound = async () => {
     setPopulating(true);
     try {
       const res = await fetch(`/api/examinations/${examId}/rounds/populate-questions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roundId, count: 50 }),
+        body: JSON.stringify({ roundId, count: 100 }),
       });
       const data = await res.json();
       if (data.success) {
-        toast.success(data.message || `Populated 50 questions for Round ${round?.round_number}.`);
+        toast.success(data.message || `Populated 100 questions for Round ${round?.round_number || 1}.`);
         fetchRoundData();
       } else {
         toast.error(data.error || 'Failed to populate questions.');
@@ -293,8 +346,8 @@ function RoundQuestionsContent() {
     setEditingQuestion(null);
     setQText('');
     setQDifficulty('medium');
-    setQMarks(round?.marks_per_question || 2);
-    setQNegativeMarks(round?.negative_marks || 0.5);
+    setQMarks(round?.marks_per_question ?? 1);
+    setQNegativeMarks(round?.negative_marks ?? 0);
     setQOptA('');
     setQOptB('');
     setQOptC('');
@@ -444,7 +497,7 @@ function RoundQuestionsContent() {
               className="text-xs uppercase tracking-wider font-semibold gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
             >
               <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Populate 50 MCQs</span>
+              <span>Populate 100 MCQs</span>
             </Button>
 
             <Button
@@ -507,7 +560,7 @@ function RoundQuestionsContent() {
           <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-xs text-amber-900 flex items-center gap-3">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              Bank has <strong>{questions.length} questions</strong>. Upload a question paper PDF or click <strong>Populate 50 MCQs</strong> so each student can receive a unique random sample of {round?.total_questions} questions.
+              Bank has <strong>{questions.length} questions</strong>. Upload a question paper PDF or click <strong>Populate 100 MCQs</strong> so each student can receive a unique random sample of {round?.total_questions} questions.
             </span>
           </div>
         )}

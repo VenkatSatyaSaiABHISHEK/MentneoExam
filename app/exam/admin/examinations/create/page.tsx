@@ -163,6 +163,12 @@ export default function CreateExaminationPage() {
         return;
       }
 
+      if (typeof window !== 'undefined' && data.data?.id) {
+        try {
+          localStorage.setItem(`mentneo_exam_${data.data.id}`, JSON.stringify(data.data));
+        } catch {}
+      }
+
       toast.success('Examination created and published successfully.');
       router.push(`/exam/admin/examinations/${data.data.id}`);
     } catch {

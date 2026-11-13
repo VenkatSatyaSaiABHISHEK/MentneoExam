@@ -725,17 +725,17 @@ export const db = {
           examination_id: id,
           round_number: 1,
           name: 'Screening & Core Fundamentals',
-          duration_minutes: 60,
+          duration_minutes: 40,
           total_questions: 30,
-          marks_per_question: 2,
-          negative_marks: 0.5,
-          qualifying_marks: 24,
-          total_marks: 60,
+          marks_per_question: 1,
+          negative_marks: 0,
+          qualifying_marks: 10,
+          total_marks: 30,
           question_selection_strategy: 'random',
           scheduled_start: null,
           status: 'active',
           auto_qualify: true,
-          instructions: 'Answer all questions. Each correct answer carries 2 marks; incorrect answers deduct 0.5 marks.',
+          instructions: 'Answer all questions. Each correct answer carries 1 mark; no negative marks.',
           round_type: 'mcq',
           allow_tab_switch: false,
           allow_copy_paste: false,
@@ -1039,12 +1039,12 @@ export const db = {
         examination_id: examId,
         round_number: num,
         name: num === 1 ? 'Screening & Core Fundamentals' : num === 2 ? 'Advanced Problem Solving & Synthesis' : 'Advanced Hardware Architecture',
-        duration_minutes: num === 1 ? 60 : num === 2 ? 45 : 60,
+        duration_minutes: num === 1 ? 40 : num === 2 ? 45 : 60,
         total_questions: num === 1 ? 30 : 5,
-        marks_per_question: num === 1 ? 2 : num === 2 ? 3 : 4,
-        negative_marks: num === 1 ? 0.5 : 1,
-        qualifying_marks: num === 1 ? 24 : num === 2 ? 8 : 12,
-        total_marks: num === 1 ? 60 : num === 2 ? 15 : 20,
+        marks_per_question: num === 1 ? 1 : num === 2 ? 3 : 4,
+        negative_marks: num === 1 ? 0 : num === 2 ? 1 : 1,
+        qualifying_marks: num === 1 ? 10 : num === 2 ? 8 : 12,
+        total_marks: num === 1 ? 30 : num === 2 ? 15 : 20,
         question_selection_strategy: 'random',
         scheduled_start: null,
         status: 'active',
@@ -2601,7 +2601,7 @@ export const db = {
     };
   },
 
-  async populateRoundQuestionPool(roundId: string, count: number = 50): Promise<number> {
+  async populateRoundQuestionPool(roundId: string, count: number = 100): Promise<number> {
     let round = await this.getRoundById(roundId);
     if (!round) {
       throw new Error(`Round ${roundId} could not be resolved`);
@@ -2617,7 +2617,12 @@ export const db = {
       { q: "In Boolean algebra, what is the simplified logical equivalent of the expression: A AND (A OR B)?", opts: ["A", "B", "A AND B", "1"], ans: "A", diff: "medium" },
       { q: "What synchronization mechanism guarantees mutual exclusion among concurrent threads accessing a critical section?", opts: ["Semaphore Flag", "Mutex Lock", "Fork-Join Executor", "Volatile Register"], ans: "B", diff: "medium" },
       { q: "Which memory management condition occurs when total free memory is adequate but divided into non-contiguous blocks that cannot satisfy an allocation request?", opts: ["Internal Fragmentation", "External Fragmentation", "Page Faulting", "Thrashing"], ans: "B", diff: "medium" },
-      { q: "In propositional logic, if statement 'P implies Q' is true, which conditional statement is its logically equivalent contrapositive?", opts: ["NOT P implies NOT Q", "NOT Q implies NOT P", "Q implies P", "P implies NOT Q"], ans: "B", diff: "medium" }
+      { q: "In propositional logic, if statement 'P implies Q' is true, which conditional statement is its logically equivalent contrapositive?", opts: ["NOT P implies NOT Q", "NOT Q implies NOT P", "Q implies P", "P implies NOT Q"], ans: "B", diff: "medium" },
+      { q: "In an undirected graph with V vertices and E edges, what is the time complexity of Breadth-First Search using an adjacency list?", opts: ["O(V + E)", "O(V * E)", "O(V^2)", "O(E log V)"], ans: "A", diff: "easy" },
+      { q: "Which CPU scheduling algorithm allocates the CPU to the process with the smallest estimated next CPU burst?", opts: ["Round Robin (RR)", "Shortest Job Next (SJN)", "First-Come First-Served (FCFS)", "Priority Preemption"], ans: "B", diff: "medium" },
+      { q: "What is the primary function of the Translation Lookaside Buffer (TLB) in virtual memory hardware?", opts: ["Cache recently executed instructions", "Cache physical page frames", "Cache virtual-to-physical address translations", "Buffer I/O interrupts"], ans: "C", diff: "medium" },
+      { q: "Which sorting algorithm is guaranteed to be stable and achieves O(N log N) worst-case time complexity?", opts: ["Quicksort", "Heapsort", "Merge Sort", "Selection Sort"], ans: "C", diff: "easy" },
+      { q: "In TCP connection termination, what state does the initiating host enter immediately after sending its final ACK to ensure receipt?", opts: ["CLOSE_WAIT", "TIME_WAIT", "FIN_WAIT_2", "LAST_ACK"], ans: "B", diff: "medium" }
     ];
 
     const advancedProblemSolvingTopics = [
@@ -2630,7 +2635,9 @@ export const db = {
       { q: "Which algorithmic heuristic combines exact path costs from the origin with estimated distances to the destination to optimize search performance?", opts: ["Breadth-First Traversal", "A* Heuristic Search", "Bellman-Ford Relaxation", "Simulated Annealing"], ans: "B", diff: "medium" },
       { q: "Which cache write policy guarantees that data is written synchronously to both the cache and persistent secondary storage simultaneously?", opts: ["Write-Through", "Write-Back", "Write-Around", "Read-Allocate"], ans: "A", diff: "medium" },
       { q: "In cryptographic systems, which mathematical complexity problem establishes the security foundation of Diffie-Hellman key exchange?", opts: ["Subset Sum Problem", "Discrete Logarithm Problem", "Knapsack Decision Problem", "Graph Isomorphism"], ans: "B", diff: "hard" },
-      { q: "What is the space complexity of Depth-First Search on a tree with maximum branching factor b and maximum depth d?", opts: ["O(b^d)", "O(b * d)", "O(d^2)", "O(b + d)"], ans: "B", diff: "medium" }
+      { q: "What is the space complexity of Depth-First Search on a tree with maximum branching factor b and maximum depth d?", opts: ["O(b^d)", "O(b * d)", "O(d^2)", "O(b + d)"], ans: "B", diff: "medium" },
+      { q: "In distributed consensus protocols, which role in the Raft algorithm is exclusively responsible for accepting client logs and replicating them to followers?", opts: ["Candidate", "Leader", "Observer", "Validator"], ans: "B", diff: "hard" },
+      { q: "Which lock-free synchronization primitive atomically updates a memory location only if its current value matches an expected operand?", opts: ["Test-and-Set", "Compare-and-Swap (CAS)", "Fetch-and-Add", "Memory Barrier"], ans: "B", diff: "hard" }
     ];
 
     const isAdvanced = round.name.toLowerCase().includes('advanced') || round.round_number >= 2;
@@ -2645,7 +2652,7 @@ export const db = {
       const qId = `q-${roundId}-${String(qNum).padStart(3, '0')}`;
       const t = sampleTopics[(qNum - 1) % sampleTopics.length];
       const cycle = Math.floor((qNum - 1) / sampleTopics.length);
-      const text = cycle > 0 ? `[Section ${cycle + 1}] ${t.q}` : t.q;
+      const text = cycle > 0 ? `[Part ${cycle + 1}] ${t.q}` : t.q;
 
       const options: QuestionOption[] = t.opts.map((optText, optIdx) => ({
         id: `opt-${qId}-${String.fromCharCode(65 + optIdx).toLowerCase()}`,
@@ -2662,8 +2669,8 @@ export const db = {
         question_text: text,
         question_type: 'single_choice',
         difficulty: t.diff as Difficulty,
-        marks: round.marks_per_question || 2,
-        negative_marks: round.negative_marks || 0.5,
+        marks: round.marks_per_question ?? 1,
+        negative_marks: round.negative_marks ?? 0,
         status: 'approved',
         sort_order: qNum,
         options,
@@ -2681,7 +2688,7 @@ export const db = {
       });
     }
 
-    resilientStorage.scheduleSave(() => store.toSnapshot());
+    resilientStorage.flushSync(() => store.toSnapshot());
     return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
   },
 
@@ -2692,9 +2699,10 @@ export const db = {
     );
   },
 
-  async createOCRJob(params: { documentName: string; roundId?: string }): Promise<OCRJob> {
+  async createOCRJob(params: { documentName: string; roundId?: string; targetCount?: number }): Promise<OCRJob> {
     const id = `job-ocr-${Date.now()}`;
     const round = params.roundId ? await this.getRoundById(params.roundId) : null;
+    const countToExtract = params.targetCount || 100;
     const job: OCRJob = {
       id,
       pdf_document_id: `doc-${Date.now()}`,
@@ -2756,13 +2764,13 @@ export const db = {
     // In Serverless execution (Vercel/AWS Lambda), background setTimeout timers get terminated
     // once the HTTP response is sent. We execute question generation and persistent save synchronously now.
     if (!dispatchedToExternal) {
-      let extractedCount = 50;
+      let extractedCount = countToExtract;
       if (params.roundId) {
         try {
-          extractedCount = await this.populateRoundQuestionPool(params.roundId, 50);
+          extractedCount = await this.populateRoundQuestionPool(params.roundId, countToExtract);
         } catch (popErr) {
           console.warn('[OCR Engine] Error populating questions:', popErr);
-          extractedCount = 50;
+          extractedCount = countToExtract;
         }
       }
       job.status = 'completed';
