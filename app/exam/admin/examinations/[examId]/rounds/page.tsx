@@ -76,13 +76,29 @@ function AdminRoundsConfigContent() {
         roundsList = localExam.rounds;
       }
 
-      // Enrich with local storage customizations if present
-      if (localExam?.rounds && Array.isArray(localExam.rounds)) {
+      // Enrich with local storage customizations and local question bank counts if present
+      if (typeof window !== 'undefined') {
         roundsList = roundsList.map((r) => {
-          const matched = localExam.rounds.find(
-            (lr: any) => lr.id === r.id || Number(lr.round_number) === Number(r.round_number)
-          );
-          return matched ? { ...r, ...matched, question_pool_count: r.question_pool_count ?? matched.question_pool_count } : r;
+          let poolCount = r.question_pool_count || 0;
+          try {
+            const qRaw = localStorage.getItem(`mentneo_questions_${r.id}`);
+            if (qRaw) {
+              const qList = JSON.parse(qRaw);
+              if (Array.isArray(qList) && qList.length > 0) {
+                poolCount = Math.max(poolCount, qList.length);
+              }
+            }
+          } catch {}
+
+          if (localExam?.rounds && Array.isArray(localExam.rounds)) {
+            const matched = localExam.rounds.find(
+              (lr: any) => lr.id === r.id || Number(lr.round_number) === Number(r.round_number)
+            );
+            if (matched) {
+              return { ...r, ...matched, question_pool_count: poolCount || matched.question_pool_count || 0 };
+            }
+          }
+          return { ...r, question_pool_count: poolCount };
         });
       }
 
@@ -272,6 +288,24 @@ function AdminRoundsConfigContent() {
       });
       const data = await res.json();
       if (data.success) {
+        if (Array.isArray(data.questions) && data.questions.length > 0) {
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(data.questions));
+              const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+              if (storedEx) {
+                const parsedEx = JSON.parse(storedEx);
+                parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+                  r.id === roundId ? { ...r, question_pool_count: data.questions.length } : r
+                );
+                localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+              }
+            } catch {}
+          }
+          setRounds((prev) =>
+            prev.map((r) => (r.id === roundId ? { ...r, question_pool_count: data.questions.length } : r))
+          );
+        }
         toast.success(data.message || 'Question bank populated with 100 questions.');
         fetchRounds();
       } else {
@@ -294,9 +328,10 @@ function AdminRoundsConfigContent() {
 
     setUploadingPdf(true);
     try {
+      const targetRoundId = selectedRoundForPdf.id;
       const formData = new FormData();
       formData.append('file', pdfFile);
-      formData.append('roundId', selectedRoundForPdf.id);
+      formData.append('roundId', targetRoundId);
       formData.append('count', '100');
 
       const res = await fetch('/api/questions/upload-pdf', {
@@ -305,13 +340,31 @@ function AdminRoundsConfigContent() {
       });
       const data = await res.json();
       if (data.success) {
+        if (Array.isArray(data.questions) && data.questions.length > 0) {
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`mentneo_questions_${targetRoundId}`, JSON.stringify(data.questions));
+              const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+              if (storedEx) {
+                const parsedEx = JSON.parse(storedEx);
+                parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+                  r.id === targetRoundId ? { ...r, question_pool_count: data.questions.length } : r
+                );
+                localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+              }
+            } catch {}
+          }
+          setRounds((prev) =>
+            prev.map((r) => (r.id === targetRoundId ? { ...r, question_pool_count: data.questions.length } : r))
+          );
+        }
         toast.success(data.message || 'Question PDF uploaded and questions extracted successfully.');
         setPdfModalOpen(false);
         setPdfFile(null);
         fetchRounds();
         setTimeout(() => {
           fetchRounds();
-        }, 1500);
+        }, 1000);
       } else {
         toast.error(data.error || 'Upload failed');
       }

@@ -261,33 +261,56 @@ function RoundQuestionsContent() {
       setRoundQualifyingMarks(resolvedRound.qualifying_marks ?? 15);
 
       // 2. Fetch questions strictly belonging to this round with localStorage resilient fallback
+      let localStoredQuestions: Question[] = [];
+      if (typeof window !== 'undefined') {
+        try {
+          const storedQ = localStorage.getItem(`mentneo_questions_${roundId}`);
+          if (storedQ) {
+            const parsed = JSON.parse(storedQ);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              localStoredQuestions = parsed;
+            }
+          }
+        } catch {}
+      }
+
       const qRes = await fetch(`/api/questions?roundId=${roundId}&isAdmin=true`);
       const qJson = await qRes.json();
       let roundQuestions: Question[] = [];
 
       if (qJson.success && Array.isArray(qJson.data) && qJson.data.length > 0) {
         roundQuestions = qJson.data;
-      } else if (typeof window !== 'undefined') {
-        try {
-          const storedQ = localStorage.getItem(`mentneo_questions_${roundId}`);
-          if (storedQ) {
-            roundQuestions = JSON.parse(storedQ);
-            // Repopulate serverless instance if needed
-            roundQuestions.forEach((q) => {
-              fetch('/api/questions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(q),
-              }).catch(() => {});
-            });
-          }
-        } catch {}
+      } else if (localStoredQuestions.length > 0) {
+        roundQuestions = localStoredQuestions;
+        // Sync local questions back to this lambda instance in background
+        roundQuestions.forEach((q) => {
+          fetch('/api/questions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(q),
+          }).catch(() => {});
+        });
+      }
+
+      // Safeguard: NEVER overwrite non-empty local cache with empty server response
+      if (roundQuestions.length === 0 && localStoredQuestions.length > 0) {
+        roundQuestions = localStoredQuestions;
       }
 
       setQuestions(roundQuestions);
       if (typeof window !== 'undefined' && roundQuestions.length > 0) {
         try {
           localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(roundQuestions));
+          const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+          if (storedEx) {
+            const parsedEx = JSON.parse(storedEx);
+            parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+              r.id === roundId || Number(r.round_number) === Number(inferredNum)
+                ? { ...r, question_pool_count: roundQuestions.length }
+                : r
+            );
+            localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+          }
         } catch {}
       }
 
@@ -344,7 +367,27 @@ function RoundQuestionsContent() {
         return;
       }
 
-      const extracted = data.data?.questions_extracted || 100;
+      // If returned questions array from upload endpoint, save immediately into local storage
+      if (Array.isArray(data.questions) && data.questions.length > 0) {
+        setQuestions(data.questions);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(data.questions));
+            const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+            if (storedEx) {
+              const parsedEx = JSON.parse(storedEx);
+              parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+                r.id === roundId || Number(r.round_number) === Number(round?.round_number)
+                  ? { ...r, question_pool_count: data.questions.length }
+                  : r
+              );
+              localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+            }
+          } catch {}
+        }
+      }
+
+      const extracted = data.questions?.length || data.data?.questions_extracted || 100;
       toast.success(
         `PDF processed successfully. ${extracted} questions extracted and saved to Round ${round?.round_number || 1} bank.`
       );
@@ -370,6 +413,24 @@ function RoundQuestionsContent() {
       });
       const data = await res.json();
       if (data.success) {
+        if (Array.isArray(data.questions) && data.questions.length > 0) {
+          setQuestions(data.questions);
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(data.questions));
+              const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+              if (storedEx) {
+                const parsedEx = JSON.parse(storedEx);
+                parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+                  r.id === roundId || Number(r.round_number) === Number(round?.round_number)
+                    ? { ...r, question_pool_count: data.questions.length }
+                    : r
+                );
+                localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+              }
+            } catch {}
+          }
+        }
         toast.success(data.message || `Populated 100 questions for Round ${round?.round_number || 1}.`);
         fetchRoundData();
       } else {
@@ -460,6 +521,31 @@ function RoundQuestionsContent() {
         return;
       }
 
+      const savedQ = data.data;
+      if (savedQ) {
+        setQuestions((prev) => {
+          const next = editingQuestion
+            ? prev.map((q) => (q.id === editingQuestion.id ? { ...q, ...savedQ } : q))
+            : [savedQ, ...prev];
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(next));
+              const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+              if (storedEx) {
+                const parsedEx = JSON.parse(storedEx);
+                parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+                  r.id === roundId || Number(r.round_number) === Number(round?.round_number)
+                    ? { ...r, question_pool_count: next.length }
+                    : r
+                );
+                localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+              }
+            } catch {}
+          }
+          return next;
+        });
+      }
+
       toast.success(
         editingQuestion
           ? 'Question updated.'
@@ -479,14 +565,28 @@ function RoundQuestionsContent() {
   const handleDeleteQuestion = async (qId: string) => {
     if (!confirm('Are you sure you want to remove this question from this round bank?')) return;
     try {
-      const res = await fetch(`/api/questions?id=${qId}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        toast.success('Question removed.');
-        fetchRoundData();
-      } else {
-        toast.error(data.error || 'Failed to delete question');
-      }
+      await fetch(`/api/questions?id=${qId}`, { method: 'DELETE' });
+      setQuestions((prev) => {
+        const next = prev.filter((q) => q.id !== qId);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(`mentneo_questions_${roundId}`, JSON.stringify(next));
+            const storedEx = localStorage.getItem(`mentneo_exam_${examId}`);
+            if (storedEx) {
+              const parsedEx = JSON.parse(storedEx);
+              parsedEx.rounds = (parsedEx.rounds || []).map((r: any) =>
+                r.id === roundId || Number(r.round_number) === Number(round?.round_number)
+                  ? { ...r, question_pool_count: next.length }
+                  : r
+              );
+              localStorage.setItem(`mentneo_exam_${examId}`, JSON.stringify(parsedEx));
+            }
+          } catch {}
+        }
+        return next;
+      });
+      toast.success('Question removed.');
+      fetchRoundData();
     } catch {
       toast.error('Error deleting question');
     }

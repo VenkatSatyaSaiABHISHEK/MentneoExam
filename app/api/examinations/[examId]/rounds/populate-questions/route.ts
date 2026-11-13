@@ -16,6 +16,7 @@ export async function POST(
     }
 
     const totalInPool = await db.populateRoundQuestionPool(roundId, count || 100);
+    const questions = await db.getQuestionsByRoundId(roundId, true);
 
     return NextResponse.json({
       success: true,
@@ -24,6 +25,7 @@ export async function POST(
         roundId,
         questionPoolCount: totalInPool,
       },
+      questions,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to populate questions';

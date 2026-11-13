@@ -2076,6 +2076,14 @@ export const db = {
       (q) => q.round_id === params.roundId && (q.status === 'approved' || !q.status)
     );
 
+    // Resilient serverless fallback: if lambda memory is cold/empty, auto-populate from bank immediately
+    if (pool.length === 0) {
+      await this.populateRoundQuestionPool(params.roundId, Math.max(round.total_questions * 2, 50));
+      pool = Array.from(store.questions.values()).filter(
+        (q) => q.round_id === params.roundId && (q.status === 'approved' || !q.status)
+      );
+    }
+
     let assigned: string[] = [];
     const targetCount = Math.min(round.total_questions, pool.length);
 
@@ -2987,9 +2995,11 @@ export const db = {
           });
 
           extractedCount = questions.length;
+          (job as any).questions = questions;
         } catch (popErr) {
           console.warn('[OCR Engine] Error processing PDF questions:', popErr);
           extractedCount = await this.populateRoundQuestionPool(params.roundId, countToExtract);
+          (job as any).questions = await this.getQuestionsByRoundId(params.roundId, true);
         }
       }
       job.status = 'completed';

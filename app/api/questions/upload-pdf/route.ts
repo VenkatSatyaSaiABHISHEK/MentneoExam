@@ -24,9 +24,12 @@ export async function POST(req: Request) {
       fileBuffer,
     });
 
+    const questions = (job as any).questions || (roundId ? await db.getQuestionsByRoundId(roundId, true) : []);
+
     return NextResponse.json({
       success: true,
       data: job,
+      questions,
       message: `Question PDF uploaded. ${job.questions_extracted || targetCount} questions extracted and added to round question bank.`,
     });
   } catch (error: unknown) {

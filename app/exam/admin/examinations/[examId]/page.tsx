@@ -62,12 +62,13 @@ function ExaminationDetailContent() {
             name: localExam.name || json.data.name,
             description: localExam.description || json.data.description,
           };
-          if (localExam.rounds && Array.isArray(localExam.rounds)) {
-            finalData.rounds = (json.data.rounds || []).map((r: ExaminationRound) => {
-              const matched = localExam.rounds.find(
-                (lr: any) => lr.id === r.id || Number(lr.round_number) === Number(r.round_number)
+          if (localExam.rounds && Array.isArray(localExam.rounds) && localExam.rounds.length > 0) {
+            const serverRounds = json.data.rounds || [];
+            finalData.rounds = localExam.rounds.map((lr: any) => {
+              const matchedServer = serverRounds.find(
+                (sr: any) => sr.id === lr.id || Number(sr.round_number) === Number(lr.round_number)
               );
-              return matched ? { ...r, ...matched } : r;
+              return matchedServer ? { ...matchedServer, ...lr } : lr;
             });
           }
         }
