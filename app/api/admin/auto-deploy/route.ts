@@ -3,69 +3,160 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 const execAsync = promisify(exec);
 
-export async function POST(req: Request) {
+// In-flight deployment lock to prevent overlapping builds
+let isDeploying = false;
+
+async function executeDeployment(triggerSource: string) {
+  if (isDeploying) {
+    console.log('[Auto-Deploy] Deployment already in progress. Skipping duplicate request.');
+    return;
+  }
+  isDeploying = true;
+  const statusFile = path.join(process.cwd(), 'data', 'cluster_sync_status.json');
+
+  const recordStatus = (data: Record<string, any>) => {
+    try {
+      const dir = path.dirname(statusFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(statusFile, JSON.stringify(data, null, 2));
+    } catch {
+      // ignore
+    }
+  };
+
   try {
-    const logs: string[] = [];
-
-    logs.push('[1/3] Pulling latest commits from GitHub origin/master...');
-    const { stdout: pullOut, stderr: pullErr } = await execAsync('git pull origin master', {
-      cwd: process.cwd(),
-      timeout: 30000,
+    console.log(`[Auto-Deploy] Initiated by ${triggerSource}...`);
+    recordStatus({
+      active: true,
+      status: 'deploying',
+      lastDeployTrigger: new Date().toISOString(),
+      triggerSource,
     });
-    logs.push(pullOut || pullErr || 'Git pull completed.');
 
-    logs.push('[2/3] Building production Next.js bundles...');
-    const { stdout: buildOut } = await execAsync('npm run build', {
-      cwd: process.cwd(),
-      timeout: 180000,
-    });
-    logs.push('Build successfully compiled.');
+    // 1. Git pull
+    console.log('[Auto-Deploy] [1/3] Pulling latest changes from GitHub...');
+    await execAsync('git pull origin master', { cwd: process.cwd(), timeout: 30000 });
 
-    logs.push('[3/3] Reloading PM2 processes with zero downtime...');
+    // 2. Build Next.js
+    console.log('[Auto-Deploy] [2/3] Building production bundles (npm run build)...');
+    await execAsync('npm run build', { cwd: process.cwd(), timeout: 180000 });
+
+    // 3. Reload PM2
+    console.log('[Auto-Deploy] [3/3] Reloading PM2 exams service...');
     try {
       await execAsync('pm2 reload exams', { cwd: process.cwd(), timeout: 15000 });
-      logs.push('PM2 service reloaded cleanly.');
     } catch {
       try {
         await execAsync('pm2 restart exams', { cwd: process.cwd(), timeout: 15000 });
-        logs.push('PM2 service restarted.');
-      } catch (err: any) {
-        logs.push('Note: PM2 not running on this node (running standalone).');
+      } catch {
+        // running standalone
       }
     }
 
-    // Record in sync status file
+    let currentHash = 'latest';
     try {
-      const statusFile = path.join(process.cwd(), 'data', 'cluster_sync_status.json');
       const { stdout: hashOut } = await execAsync('git rev-parse HEAD', { cwd: process.cwd() });
-      const currentHash = hashOut.trim().slice(0, 7);
-      fs.writeFileSync(
-        statusFile,
-        JSON.stringify(
-          {
-            active: true,
-            status: 'synchronized',
-            lastCheck: new Date().toISOString(),
-            localHash: currentHash,
-            remoteHash: currentHash,
-            upToDate: true,
-            lastDeployTrigger: new Date().toISOString(),
-          },
-          null,
-          2
-        )
-      );
+      currentHash = hashOut.trim().slice(0, 7);
     } catch {
       // ignore
     }
 
+    recordStatus({
+      active: true,
+      status: 'synchronized',
+      lastCheck: new Date().toISOString(),
+      localHash: currentHash,
+      remoteHash: currentHash,
+      upToDate: true,
+      lastSuccessDeploy: new Date().toISOString(),
+      triggerSource,
+    });
+
+    console.log(`[Auto-Deploy] Deployment completed successfully! Current commit: ${currentHash}`);
+  } catch (err: any) {
+    console.error('[Auto-Deploy Error]:', err.message);
+    recordStatus({
+      active: true,
+      status: 'error',
+      errorMessage: err.message,
+      lastDeployTrigger: new Date().toISOString(),
+    });
+  } finally {
+    isDeploying = false;
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const rawBody = await req.text();
+    const githubEvent = req.headers.get('x-github-event');
+    const signature = req.headers.get('x-hub-signature-256');
+
+    // Secret from environment or default
+    const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET || 'exams_webhook_secret_3101';
+
+    // If request comes from GitHub, verify HMAC signature
+    if (githubEvent) {
+      if (signature) {
+        const expectedSig = 'sha256=' + crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
+        const signatureBuffer = Buffer.from(signature);
+        const expectedBuffer = Buffer.from(expectedSig);
+
+        if (
+          signatureBuffer.length !== expectedBuffer.length ||
+          !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+        ) {
+          return NextResponse.json({ success: false, error: 'Invalid HMAC signature' }, { status: 401 });
+        }
+      }
+
+      // Handle GitHub test ping event
+      if (githubEvent === 'ping') {
+        return NextResponse.json({
+          success: true,
+          message: 'Pong! GitHub Webhook connection verified successfully.',
+        });
+      }
+
+      // Handle GitHub push event
+      if (githubEvent === 'push') {
+        let payload: any = {};
+        try {
+          payload = JSON.parse(rawBody);
+        } catch {
+          // ignore
+        }
+
+        // Only deploy if the push is to master / main branch
+        const branch = payload.ref ? payload.ref.replace('refs/heads/', '') : 'master';
+        if (branch !== 'master' && branch !== 'main') {
+          return NextResponse.json({
+            success: true,
+            message: `Push detected on branch ${branch}. Skipping (auto-deploy triggers only for master).`,
+          });
+        }
+
+        // Respond immediately to GitHub (GitHub requires response < 10 seconds)
+        // Run deployment asynchronously in background
+        executeDeployment(`GitHub Webhook (push to ${branch})`);
+
+        return NextResponse.json({
+          success: true,
+          message: 'Webhook received. Production build and reload job dispatched in background.',
+        });
+      }
+    }
+
+    // Direct trigger from Admin Console
+    executeDeployment('Admin Console Dashboard');
+
     return NextResponse.json({
       success: true,
-      message: 'Zero-touch update completed successfully.',
-      logs,
+      message: 'Zero-touch update dispatched in background.',
     });
   } catch (error: any) {
     return NextResponse.json(
