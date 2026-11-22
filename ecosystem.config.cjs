@@ -13,6 +13,14 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 3000
       }
+    },
+    {
+      name: 'exams-tunnel',
+      script: 'cloudflared',
+      args: 'tunnel run --token eyJhIjoiZWQzYTVjYmY4YjBmMGMwYTk4ZGFhY2E3OTg0MGQwZjkiLCJ0IjoiZjFmYjJkZmMtYmNhMS00ZjgzLWJmM2YtMTAxY2MyMjQ5ZTcwIiwicyI6IllUVXlNREl3WVdFdFl6a3lOeTAwTVdZNExXRTRaRGt0TmpJMk5URmlaVGRrWlRoaSJ9',
+      instances: 1,
+      autorestart: true,
+      watch: false
     }
   ]
 };
