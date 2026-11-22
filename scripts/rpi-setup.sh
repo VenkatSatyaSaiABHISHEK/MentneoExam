@@ -9,8 +9,8 @@ echo "Installing ExamS on Raspberry Pi 4"
 echo "============================================================"
 
 # 1. System packages update
-echo "[1/6] Updating system packages..."
-sudo apt update && sudo apt upgrade -y
+echo "[1/6] Updating system package index..."
+sudo apt update
 sudo apt install -y curl git build-essential ufw
 
 # 2. Install Node.js 20 LTS (ARM64)
