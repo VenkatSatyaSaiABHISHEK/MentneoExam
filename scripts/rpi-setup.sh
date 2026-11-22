@@ -47,7 +47,8 @@ fi
 
 # Configure Cloudflare Tunnel service with production token
 TUNNEL_TOKEN="eyJhIjoiZWQzYTVjYmY4YjBmMGMwYTk4ZGFhY2E3OTg0MGQwZjkiLCJ0IjoiZjFmYjJkZmMtYmNhMS00ZjgzLWJmM2YtMTAxY2MyMjQ5ZTcwIiwicyI6IllUVXlNREl3WVdFdFl6a3lOeTAwTVdZNExXRTRaRGt0TmpJMk5URmlaVGRrWlRoaSJ9"
-sudo cloudflared service install "$TUNNEL_TOKEN" || true
+sudo cloudflared service uninstall 2>/dev/null || true
+sudo cloudflared service install "$TUNNEL_TOKEN"
 sudo systemctl enable cloudflared
 sudo systemctl restart cloudflared
 
