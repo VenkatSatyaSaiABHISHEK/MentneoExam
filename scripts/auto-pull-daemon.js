@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const STATUS_FILE = path.join(__dirname, '..', 'data', 'cluster_sync_status.json');
-const CHECK_INTERVAL_MS = 45000; // 45 seconds
+const CHECK_INTERVAL_MS = parseInt(process.env.AUTOPULL_INTERVAL_MS || '180000', 10); // Default: 3 minutes
 
 function recordStatus(data) {
   try {
@@ -19,12 +19,12 @@ function runCommand(cmd) {
   return execSync(cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 }
 
-console.log('[Auto-Pull Daemon] Started. Monitoring GitHub repository every 45s...');
+console.log(`[Auto-Pull Daemon] Started. Checking for updates every ${Math.round(CHECK_INTERVAL_MS / 1000)}s...`);
 
 async function checkAndPull() {
   const now = new Date().toISOString();
   try {
-    // 1. Fetch remote tracking branch
+    // 1. Fetch remote tracking branch (lightweight: ~1KB packet)
     runCommand('git fetch origin master');
 
     // 2. Check local vs remote HEAD
@@ -45,6 +45,20 @@ async function checkAndPull() {
       statusObj.status = 'synchronized';
       recordStatus(statusObj);
       return;
+    }
+
+    // Safety Guard: Check if students are actively taking exams before building
+    try {
+      const checkRes = runCommand('curl -s http://localhost:3000/api/admin/stats');
+      const stats = JSON.parse(checkRes);
+      if (stats?.data?.activeAttempts > 0) {
+        console.warn(`[Auto-Pull Exam-Guard] ${stats.data.activeAttempts} candidates currently taking an examination. Deferring build until exam concludes.`);
+        statusObj.status = 'deferred_exam_active';
+        recordStatus(statusObj);
+        return;
+      }
+    } catch {
+      // Continue if stats endpoint not reachable
     }
 
     console.log(`[Auto-Pull] Update detected! Local: ${localHash.slice(0, 7)} -> Remote: ${remoteHash.slice(0, 7)}`);
