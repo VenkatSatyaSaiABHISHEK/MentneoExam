@@ -62,6 +62,19 @@ export async function queryPg<T extends QueryResultRow = any>(
       const freshPool = getPgPool();
       return await freshPool.query<T>(text, params);
     }
+
+    // Auto-bootstrap schema if a table does not exist
+    if (err.code === '42P01') {
+      console.warn('[PostgreSQL Auto-Bootstrapping missing schema tables...]');
+      try {
+        const { ensureDatabaseSchema } = await import('@/lib/db/auto-migrate');
+        await ensureDatabaseSchema();
+        return await p.query<T>(text, params);
+      } catch (bootErr: any) {
+        console.error('[PostgreSQL Schema Bootstrap Failed]:', bootErr.message);
+      }
+    }
+
     throw err;
   }
 }

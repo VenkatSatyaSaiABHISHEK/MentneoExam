@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Shield,
   LogOut,
+  Cpu,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AdminPinGate } from '@/components/admin/admin-pin-gate';
@@ -49,6 +50,7 @@ export function AdminLayoutWrapper({ children }: { children: React.ReactNode }) 
     { label: 'Overview', href: '/admin', icon: LayoutDashboard, exact: true },
     { label: 'Examinations', href: '/admin/examinations', icon: FileCheck2, exact: false },
     { label: 'New Exam', href: '/admin/examinations/create', icon: PlusCircle, exact: false },
+    { label: 'Cluster & Nodes', href: '/admin/cluster', icon: Cpu, exact: false },
     { label: 'Settings & Logs', href: '/admin/settings', icon: Settings, exact: false },
   ];
 
