@@ -177,6 +177,26 @@ function AdminLiveResultsContent() {
     }
   };
 
+  const handleResetWarnings = async (registrationId: string) => {
+    try {
+      const res = await fetch(`/api/examinations/${examId}/students/${registrationId}/reset-warnings`, {
+        method: 'POST',
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success('Candidate infraction warnings reset to 0.');
+        fetchResults(true);
+        if (selectedDossierCandidate) {
+          openCandidateDossier(registrationId, selectedDossierCandidate.studentName);
+        }
+      } else {
+        toast.error(json.error || 'Failed to reset warnings');
+      }
+    } catch {
+      toast.error('Network error resetting warnings');
+    }
+  };
+
   // Hydrate from localStorage first so page refresh never flickers to 0
   React.useEffect(() => {
     try {
@@ -284,12 +304,18 @@ function AdminLiveResultsContent() {
   const currentSummary = React.useMemo(() => {
     if (activeTab === 'all') {
       const activeRows = rows.filter((r) => r.attemptStatus !== 'registered');
+      const uniqueAppeared = new Set(activeRows.map((r) => r.loginId || r.registrationId)).size;
+      const uniquePassed = new Set(rows.filter((r) => r.isQualified === true).map((r) => r.loginId || r.registrationId)).size;
+      const uniqueFailed = new Set(rows.filter((r) => r.isQualified === false).map((r) => r.loginId || r.registrationId)).size;
+      const uniqueInProgress = new Set(rows.filter((r) => r.attemptStatus === 'in_progress').map((r) => r.loginId || r.registrationId)).size;
+      const totalCandidates = new Set(rows.map((r) => r.loginId || r.registrationId)).size;
+
       return {
-        appeared: activeRows.length || rows.length,
-        passed: rows.filter((r) => r.isQualified === true).length,
-        failed: rows.filter((r) => r.isQualified === false).length,
-        inProgress: rows.filter((r) => r.attemptStatus === 'in_progress').length,
-        passPercentage: activeRows.length > 0 ? Math.round((rows.filter((r) => r.isQualified === true).length / activeRows.length) * 100) : 0,
+        appeared: uniqueAppeared || totalCandidates,
+        passed: uniquePassed,
+        failed: uniqueFailed,
+        inProgress: uniqueInProgress,
+        passPercentage: uniqueAppeared > 0 ? Math.round((uniquePassed / uniqueAppeared) * 100) : 0,
       };
     } else if (activeTab === 'rankings' || activeTab === 'students') {
       const qualified = currentTabRows.filter((r) => r.isQualified === true).length;
@@ -1189,16 +1215,28 @@ function AdminLiveResultsContent() {
 
                         {/* Reconduct Button for HR */}
                         {hasAttempt && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={reconducting}
-                            onClick={() => handleReconductRound(detailedRecord.registrationId, curRound.roundId, curRound.roundNumber)}
-                            className="text-xs h-8 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
-                            <span>Reconduct Round {curRound.roundNumber}</span>
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleResetWarnings(detailedRecord.registrationId)}
+                              className="text-xs h-8 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 cursor-pointer"
+                            >
+                              <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Reset Infractions (0)</span>
+                            </Button>
+
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={reconducting}
+                              onClick={() => handleReconductRound(detailedRecord.registrationId, curRound.roundId, curRound.roundNumber)}
+                              className="text-xs h-8 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Reconduct Round {curRound.roundNumber}</span>
+                            </Button>
+                          </div>
                         )}
                       </div>
                     </div>

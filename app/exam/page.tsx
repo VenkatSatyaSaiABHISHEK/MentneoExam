@@ -1,13 +1,11 @@
 import * as React from 'react';
-import Link from 'next/link';
 import { db } from '@/lib/db/store';
 import { Navbar } from '@/components/common/navbar';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Calendar, Clock, Layers, ArrowRight, FileQuestion } from 'lucide-react';
+import { Clock, Layers, FileQuestion, Users, Award } from 'lucide-react';
 import { formatDuration } from '@/lib/utils';
+import { EnterExamButton } from '@/components/exam/enter-exam-button';
+import { CatalogVisualBanner } from '@/components/exam/catalog-visual-banner';
 
 async function ExamCatalogList() {
   const examinations = await db.getExaminations();
@@ -17,115 +15,189 @@ async function ExamCatalogList() {
 
   if (availableExams.length === 0) {
     return (
-      <EmptyState
-        icon={FileQuestion}
-        title="No examination is currently available."
-        description="Upcoming examinations will appear here once published by administrators."
-      />
+      <div className="rounded-2xl border border-dashed border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] p-8 text-center">
+        <EmptyState
+          icon={FileQuestion}
+          title="No Active Examination Scheduled"
+          description="Upcoming examinations will appear here once published by the examination coordinator."
+        />
+      </div>
     );
   }
 
+  // Fetch stats for all exams in parallel
+  const examsWithStats = await Promise.all(
+    availableExams.map(async (exam) => {
+      const stats = await db.getExamStudentStats(exam.id);
+      const totalDuration = (exam.rounds || []).reduce((acc, r) => acc + r.duration_minutes, 0);
+      const totalMarks = (exam.rounds || []).reduce((acc, r) => acc + Number(r.total_marks || 0), 0);
+      const roundCount = exam.rounds?.length || 0;
+      const isLive = exam.status === 'live';
+      const isRoster = (exam.auth_mode ?? 'roster') === 'roster';
+
+      return {
+        exam,
+        stats,
+        totalDuration,
+        totalMarks,
+        roundCount,
+        isLive,
+        isRoster,
+      };
+    })
+  );
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {availableExams.map((exam) => {
-        const totalDuration = (exam.rounds || []).reduce((acc, r) => acc + r.duration_minutes, 0);
-        const roundCount = exam.rounds?.length || 0;
+    <div className="space-y-4">
+      {examsWithStats.map(({ exam, stats, totalDuration, totalMarks, roundCount, isLive, isRoster }) => (
+        <div
+          key={exam.id}
+          className="group relative rounded-2xl border border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-[0_4px_24px_rgba(184,179,255,0.08)] hover:border-[#b8b3ff] dark:hover:border-[#635bff] transition-all duration-300 overflow-hidden p-5 sm:p-6"
+        >
+          {/* Top Row: Status & Slug */}
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#f0effe] dark:bg-[#1e1b3d] text-[#635bff] dark:text-[#b8b3ff] border border-[#e0ddfc] dark:border-[#38336d]">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                {isLive ? 'Active Assessment' : 'Scheduled'}
+              </span>
+            </div>
+            <span className="text-xs font-mono text-[#706b9b] dark:text-[#a4a0c8]">
+              /{exam.slug}
+            </span>
+          </div>
 
-        const statusVariant = {
-          live: 'success',
-          scheduled: 'warning',
-          published: 'info',
-          draft: 'neutral',
-          completed: 'neutral',
-          archived: 'neutral',
-        }[exam.status] as 'success' | 'warning' | 'info' | 'neutral';
+          {/* Title & Description */}
+          <h2 className="text-xl sm:text-2xl font-semibold text-[#1d1a4a] dark:text-[#f4f3ff] tracking-tight group-hover:text-[#635bff] dark:group-hover:text-[#b8b3ff] transition-colors">
+            {exam.name}
+          </h2>
 
-        return (
-          <Card key={exam.id} className="flex flex-col hover:border-gray-400 transition-colors">
-            <CardHeader>
-              <div className="flex items-center justify-between mb-2">
-                <Badge variant={statusVariant}>{exam.status}</Badge>
-                <span className="text-[11px] font-mono text-gray-400">/{exam.slug}</span>
-              </div>
-              <CardTitle className="text-lg leading-snug">{exam.name}</CardTitle>
-              <CardDescription className="line-clamp-2 mt-1">
-                {exam.description || 'Comprehensive evaluation covering multiple rounds and skill levels.'}
-              </CardDescription>
-            </CardHeader>
+          <p className="mt-1 text-xs sm:text-sm text-[#706b9b] dark:text-[#a4a0c8] leading-relaxed">
+            {exam.description || 'Enterprise candidate assessment with sequential qualification criteria.'}
+          </p>
 
-            <CardContent className="space-y-3 flex-1 text-xs text-gray-600">
-              <div className="flex items-center gap-2.5">
-                <Layers className="w-4 h-4 text-gray-400 shrink-0" />
-                <span>{roundCount} Dynamic Round{roundCount !== 1 ? 's' : ''}</span>
+          {/* Key Statistics Grid (2x2 layout inside the card) */}
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:gap-2.5 pt-3.5 sm:pt-4 border-t border-[#e6e3f8] dark:border-[#2c2854]">
+            {/* 1. Candidate Progress / Roster */}
+            <div className="p-2.5 sm:p-3 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d] border border-[#e6e3f8] dark:border-[#2c2854]">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-[#706b9b] dark:text-[#a4a0c8]">
+                <Users className="w-3.5 h-3.5 text-[#8580b0]" />
+                <span className="truncate">Candidate Status</span>
               </div>
-              <div className="flex items-center gap-2.5">
-                <Clock className="w-4 h-4 text-gray-400 shrink-0" />
-                <span>Total Duration: {formatDuration(totalDuration)}</span>
+              <div className="mt-1 font-semibold text-xs sm:text-sm text-[#1d1a4a] dark:text-[#f4f3ff] truncate">
+                {isRoster ? (
+                  stats.registered > 0 ? (
+                    <span>{stats.notWritten} Yet to Write</span>
+                  ) : (
+                    <span>Roster Pending</span>
+                  )
+                ) : (
+                  <span>Open Enrollment</span>
+                )}
               </div>
-              <div className="flex items-center gap-2.5">
-                <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
-                <span>
-                  {exam.start_time
-                    ? new Date(exam.start_time).toLocaleDateString(undefined, {
-                        dateStyle: 'medium',
-                      })
-                    : 'Immediate Availability'}
-                </span>
+              <div className="text-[9px] sm:text-[10px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5 truncate">
+                {isRoster ? `${stats.registered} registered candidates` : 'Direct candidate entry'}
               </div>
-            </CardContent>
+            </div>
 
-            <CardFooter className="pt-4 border-t border-gray-100">
-              <Link href={`/exam/${exam.slug}`} className="w-full">
-                <Button className="w-full text-xs font-semibold uppercase tracking-wider gap-2">
-                  <span>Enter Examination</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
-              </Link>
-            </CardFooter>
-          </Card>
-        );
-      })}
+            {/* 2. Total Duration */}
+            <div className="p-2.5 sm:p-3 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d] border border-[#e6e3f8] dark:border-[#2c2854]">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-[#706b9b] dark:text-[#a4a0c8]">
+                <Clock className="w-3.5 h-3.5 text-[#8580b0]" />
+                <span className="truncate">Total Duration</span>
+              </div>
+              <div className="mt-1 font-semibold text-xs sm:text-sm text-[#1d1a4a] dark:text-[#f4f3ff] truncate">
+                {formatDuration(totalDuration)}
+              </div>
+              <div className="text-[9px] sm:text-[10px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5 truncate">
+                Timed assessment session
+              </div>
+            </div>
+
+            {/* 3. Evaluation Structure */}
+            <div className="p-2.5 sm:p-3 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d] border border-[#e6e3f8] dark:border-[#2c2854]">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-[#706b9b] dark:text-[#a4a0c8]">
+                <Layers className="w-3.5 h-3.5 text-[#8580b0]" />
+                <span className="truncate">Evaluation Structure</span>
+              </div>
+              <div className="mt-1 font-semibold text-xs sm:text-sm text-[#1d1a4a] dark:text-[#f4f3ff] truncate">
+                {roundCount} Dynamic Round{roundCount !== 1 ? 's' : ''}
+              </div>
+              <div className="text-[9px] sm:text-[10px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5 truncate">
+                Sequential qualification
+              </div>
+            </div>
+
+            {/* 4. Total Marks */}
+            <div className="p-2.5 sm:p-3 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d] border border-[#e6e3f8] dark:border-[#2c2854]">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-[#706b9b] dark:text-[#a4a0c8]">
+                <Award className="w-3.5 h-3.5 text-[#8580b0]" />
+                <span className="truncate">Scoring &amp; Marks</span>
+              </div>
+              <div className="mt-1 font-semibold text-xs sm:text-sm text-[#1d1a4a] dark:text-[#f4f3ff] truncate">
+                {totalMarks > 0 ? `${totalMarks} Total Marks` : 'Criterion based'}
+              </div>
+              <div className="text-[9px] sm:text-[10px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5 truncate">
+                Automated qualification
+              </div>
+            </div>
+          </div>
+
+          {/* Action Row with Sakuga Button */}
+          <div className="mt-4 sm:mt-5 pt-3 sm:pt-3.5 border-t border-[#e6e3f8] dark:border-[#2c2854] flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-[11px] text-[#706b9b] dark:text-[#a4a0c8] text-center sm:text-left">
+              Authorized candidates only • Verification required before entering.
+            </p>
+
+            <EnterExamButton slug={exam.slug} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function ExamCatalogPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50/50">
+    <div className="min-h-screen lg:h-screen flex flex-col bg-[#faf9fe] dark:bg-[#0d0c1d] text-[#1d1a4a] dark:text-[#f4f3ff] transition-colors lg:overflow-hidden">
       <Navbar />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-8 border-b border-gray-200 gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Examinations Portal</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              Select an examination below to view instructions, register, and enter scheduled rounds.
+      <main className="flex-1 w-full px-4 sm:px-8 lg:px-12 py-4 sm:py-5 flex flex-col justify-between overflow-y-auto lg:overflow-hidden">
+        <div>
+          {/* Header */}
+          <div className="mb-4 sm:mb-5 max-w-3xl">
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-[#1d1a4a] dark:text-[#f4f3ff] font-serif">
+              Examinations
+            </h1>
+            <p className="mt-1 text-xs sm:text-sm text-[#706b9b] dark:text-[#a4a0c8] leading-relaxed">
+              Select an examination below to view instructions, verify credentials, and enter scheduled evaluation rounds.
             </p>
+          </div>
+
+          {/* Layout: Card on the left, right side reserved for future animations */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
+            <div className="lg:col-span-7 xl:col-span-7">
+              <React.Suspense
+                fallback={
+                  <div className="h-56 bg-[#edeaff] dark:bg-[#1e1b3d] rounded-2xl animate-pulse" />
+                }
+              >
+                <ExamCatalogList />
+              </React.Suspense>
+            </div>
+
+            {/* Right side area: Visual Banner */}
+            <div className="hidden lg:flex lg:col-span-5 xl:col-span-5 items-center justify-center p-4">
+              <CatalogVisualBanner />
+            </div>
           </div>
         </div>
 
-        <div className="mt-8">
-          <React.Suspense
-            fallback={
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-pulse">
-                <div className="h-56 bg-gray-200 rounded-xl" />
-                <div className="h-56 bg-gray-200 rounded-xl" />
-                <div className="h-56 bg-gray-200 rounded-xl" />
-              </div>
-            }
-          >
-            <ExamCatalogList />
-          </React.Suspense>
-        </div>
-
-        <div className="mt-16 pt-8 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-gray-500">
-          <p>ExamS Assessment Infrastructure.</p>
-          <Link href="/admin">
-            <Button variant="outline" size="sm" className="text-xs uppercase tracking-wider font-semibold gap-1.5">
-              <span>Admin Console</span>
-            </Button>
-          </Link>
-        </div>
+        {/* Minimalist Footer */}
+        <footer className="pt-3 border-t border-[#e6e3f8] dark:border-[#2c2854] flex flex-col sm:flex-row items-center justify-between gap-1 sm:gap-2 text-[10px] sm:text-[11px] text-[#706b9b] dark:text-[#a4a0c8] shrink-0 pb-3 sm:pb-1 text-center sm:text-left">
+          <p>Mentneo Assessment Platform • Secure Examination Environment</p>
+          <p>All sessions monitored &amp; verified</p>
+        </footer>
       </main>
     </div>
   );

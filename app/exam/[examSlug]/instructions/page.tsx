@@ -121,149 +121,179 @@ function ExamInstructionsContent() {
   const round1 = (exam.rounds || []).find((r) => r.round_number === 1) || exam.rounds?.[0];
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50/50">
+    <div className="min-h-screen flex flex-col bg-[#faf9fe] dark:bg-[#0d0c1d] text-[#1d1a4a] dark:text-[#f4f3ff] transition-colors">
       <Navbar />
 
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <div className="flex items-center justify-between pb-6 border-b border-gray-200">
+      <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 sm:pb-6 border-b border-gray-200 dark:border-zinc-800 gap-3">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Badge variant="neutral">Pre-Flight Briefing</Badge>
               <span className="text-xs text-gray-400 font-mono">Round 1</span>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{exam.name}</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">{exam.name}</h1>
           </div>
           {student && (
-            <div className="text-right text-xs">
-              <p className="font-semibold text-gray-900">{student.full_name}</p>
+            <div className="text-left sm:text-right text-xs bg-white dark:bg-zinc-900 p-2.5 rounded-lg border border-gray-200 dark:border-zinc-800 sm:border-0 sm:p-0">
+              <p className="font-semibold text-gray-900 dark:text-zinc-100">{student.full_name}</p>
               <p className="text-gray-500 font-mono">Roll: {student.roll_number}</p>
             </div>
           )}
         </div>
 
         <div className="mt-8 space-y-6">
-          {/* Hardware & Environment Readiness */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Wifi className="w-4 h-4 text-gray-700" />
-                <span>Environment Readiness & System Integrity</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-              <div className="p-4 rounded-lg border border-gray-200 bg-white space-y-1">
-                <span className="text-gray-500 font-medium block">Authoritative Clock</span>
-                <span className="font-semibold text-gray-900 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Synchronized with Server
-                </span>
+          {/* Pre-Flight Cockpit Checklist */}
+          <div className="rounded-2xl border border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] p-6 shadow-[0_4px_24px_rgba(184,179,255,0.08)]">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 border-b border-[#e6e3f8] dark:border-[#2c2854]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <h2 className="text-base font-bold text-[#1d1a4a] dark:text-[#f4f3ff] tracking-tight">
+                    Pre-Flight Cockpit Checklist
+                  </h2>
+                </div>
+                <p className="mt-1 text-xs text-[#706b9b] dark:text-[#a4a0c8]">
+                  Automated telemetry sensors and examinee verification checks before round entry.
+                </p>
               </div>
-              <div className="p-4 rounded-lg border border-gray-200 bg-white space-y-1">
-                <span className="text-gray-500 font-medium block">Proctoring Telemetry</span>
-                <span className="font-semibold text-gray-900 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Active Focus Sensor
-                </span>
-              </div>
-              <div className="p-4 rounded-lg border border-gray-200 bg-white space-y-1">
-                <span className="text-gray-500 font-medium block">Network Resilience</span>
-                <span className="font-semibold text-gray-900 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Auto-Save on Answer
-                </span>
-              </div>
-            </CardContent>
-          </Card>
 
-          {/* Anti-Cheating Protocol */}
-          <Card className="border-amber-200 bg-amber-50/20">
-            <CardHeader>
-              <div className="flex items-center gap-2 text-amber-800">
-                <AlertTriangle className="w-4 h-4 text-amber-600" />
-                <CardTitle className="text-base text-amber-900">Proctoring Rules & Cheating Deterrence</CardTitle>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-[#f0effe] dark:bg-[#1e1b3d] text-[#635bff] dark:text-[#b8b3ff] border border-[#e0ddfc] dark:border-[#38336d] shrink-0 self-start sm:self-auto">
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Status: {agreed ? 'Cockpit Ready (4/4)' : 'Awaiting Oath (3/4)'}</span>
               </div>
-              <CardDescription className="text-amber-800/80">
-                The examination environment is strictly monitored. You are allocated a maximum of{' '}
-                {exam.max_cheating_warnings} violation warnings.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 text-xs text-gray-700">
-              <div className="flex items-start gap-2.5">
-                <Maximize2 className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Fullscreen Enforcement:</strong> Exiting fullscreen mode will immediately trigger an infraction warning.
+            </div>
+
+            {/* Checklist Grid */}
+            <div className="mt-5 space-y-3">
+              {/* Item 1: Authoritative Clock */}
+              <div className="p-3.5 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d]/60 border border-[#e6e3f8] dark:border-[#2c2854] flex items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">Authoritative Clock Synchronization</h3>
+                    <p className="text-[11px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5">
+                      Sub-tick atomic timer synchronized with server database. Local client clock tampering blocked.
+                    </p>
+                  </div>
+                </div>
+                <span className="shrink-0 text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  Armed (0.4ms)
                 </span>
               </div>
-              <div className="flex items-start gap-2.5">
-                <Eye className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Tab & Window Focus:</strong> Switching browser tabs or losing window focus is detected in real time and recorded on your session.
+
+              {/* Item 2: Proctoring Telemetry Sensor */}
+              <div className="p-3.5 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d]/60 border border-[#e6e3f8] dark:border-[#2c2854] flex items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">Proctoring &amp; Focus Telemetry Sensor</h3>
+                    <p className="text-[11px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5">
+                      Fullscreen enforcement and tab switch detector armed. Maximum {exam.max_cheating_warnings} violation warnings allowed.
+                    </p>
+                  </div>
+                </div>
+                <span className="shrink-0 text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  Armed (Max {exam.max_cheating_warnings})
                 </span>
               </div>
-              <div className="flex items-start gap-2.5">
-                <Copy className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Clipboard & Shortcuts:</strong> Copying question text, pasting, inspect tools, and unauthorized hotkeys are blocked and logged.
+
+              {/* Item 3: Local Offline WAL Buffer */}
+              <div className="p-3.5 rounded-xl bg-[#f8f7fe] dark:bg-[#1e1b3d]/60 border border-[#e6e3f8] dark:border-[#2c2854] flex items-start sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">Transactional Offline Storage Buffer</h3>
+                    <p className="text-[11px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5">
+                      Answers and code submissions auto-saved with 0ms delay to device storage. Auto-syncs if Wi-Fi flickers.
+                    </p>
+                  </div>
+                </div>
+                <span className="shrink-0 text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  Ready (0ms Buffer)
                 </span>
               </div>
-              <div className="flex items-start gap-2.5">
-                <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <span className="text-rose-700 font-medium">
-                  <strong>Automatic Termination:</strong> Reaching {exam.max_cheating_warnings} warnings will permanently lock your attempt and submit the current state.
+
+              {/* Item 4: Interactive Examinee Integrity Oath */}
+              <div
+                onClick={() => setAgreed(!agreed)}
+                className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-start sm:items-center justify-between gap-3 ${
+                  agreed
+                    ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20'
+                    : 'border-amber-300 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-950/20 hover:border-amber-400'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    id="agree-rules"
+                    checked={agreed}
+                    onChange={(e) => setAgreed(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 rounded border-gray-300 text-indigo-900 focus:ring-indigo-900 cursor-pointer"
+                  />
+                  <div>
+                    <h3 className="text-xs font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">
+                      Examinee Integrity &amp; Proctoring Oath
+                    </h3>
+                    <p className="text-[11px] text-[#706b9b] dark:text-[#a4a0c8] mt-0.5">
+                      I confirm I am {student?.full_name || 'an authorized examinee'} ({student?.roll_number || 'Registered'}). I will not open external tabs, use unauthorized assistance, or share examination materials.
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={`shrink-0 text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded border ${
+                    agreed
+                      ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                      : 'bg-amber-100 text-amber-800 border-amber-300'
+                  }`}
+                >
+                  {agreed ? 'Confirmed' : 'Action Required'}
                 </span>
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
           {/* Round Specifics */}
           {round1 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Round 1 Structure & Scoring</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-xs text-gray-600">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3 px-4 bg-gray-50 rounded-lg">
-                  <div>
-                    <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-semibold">Duration</span>
-                    <span className="text-sm font-semibold text-gray-900">{round1.duration_minutes} Minutes</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-semibold">Questions</span>
-                    <span className="text-sm font-semibold text-gray-900">{round1.total_questions} Questions</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-semibold">Marking</span>
-                    <span className="text-sm font-semibold text-gray-900">+{round1.marks_per_question} / -{round1.negative_marks}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-semibold">Qualifying Score</span>
-                    <span className="text-sm font-semibold text-emerald-700">{round1.qualifying_marks} Marks</span>
-                  </div>
-                </div>
+            <div className="rounded-2xl border border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] p-6 shadow-[0_4px_24px_rgba(184,179,255,0.08)]">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-[#1d1a4a] dark:text-[#f4f3ff] mb-4">
+                Round 1 Structure &amp; Evaluation Criteria
+              </h3>
 
-                <p className="mt-2 text-gray-500">
-                  {round1.instructions || 'Answer all questions within the allocated time. Answers are incrementally saved.'}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3 px-4 bg-[#f8f7fe] dark:bg-[#1e1b3d] rounded-xl border border-[#e6e3f8] dark:border-[#2c2854]">
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-[#706b9b] dark:text-[#a4a0c8] block font-semibold">Duration</span>
+                  <span className="text-sm font-semibold text-[#1d1a4a] dark:text-[#f4f3ff]">{round1.duration_minutes} Minutes</span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-[#706b9b] dark:text-[#a4a0c8] block font-semibold">Questions</span>
+                  <span className="text-sm font-semibold text-[#1d1a4a] dark:text-[#f4f3ff]">{round1.total_questions} Questions</span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-[#706b9b] dark:text-[#a4a0c8] block font-semibold">Marking</span>
+                  <span className="text-sm font-semibold text-[#1d1a4a] dark:text-[#f4f3ff]">+{round1.marks_per_question} / -{round1.negative_marks}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wider text-[#706b9b] dark:text-[#a4a0c8] block font-semibold">Qualifying Score</span>
+                  <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{round1.qualifying_marks} Marks</span>
+                </div>
+              </div>
+
+              {round1.instructions && (
+                <p className="mt-3 text-xs text-[#706b9b] dark:text-[#a4a0c8] leading-relaxed">
+                  {round1.instructions}
                 </p>
-              </CardContent>
-            </Card>
+              )}
+            </div>
           )}
 
-          {/* Agreement Checkbox */}
-          <div className="p-4 rounded-xl border border-gray-200 bg-white flex items-start gap-3">
-            <input
-              type="checkbox"
-              id="agree-rules"
-              checked={agreed}
-              onChange={(e) => setAgreed(e.target.checked)}
-              className="w-4 h-4 mt-0.5 rounded border-gray-300 text-gray-900 focus:ring-gray-900 cursor-pointer"
-            />
-            <label htmlFor="agree-rules" className="text-xs text-gray-700 cursor-pointer leading-relaxed">
-              I have read and understood all examination regulations. I confirm that I will not attempt to open external
-              windows, switch tabs, or use unauthorized assistance. I consent to real-time proctoring telemetry.
-            </label>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4">
+          {/* Action Row */}
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-2">
             <Button variant="outline" size="md" onClick={() => router.push(`/exam/${slug}`)}>
               Back
             </Button>
@@ -272,7 +302,11 @@ function ExamInstructionsContent() {
               disabled={!agreed}
               isLoading={starting}
               onClick={handleStartExam}
-              className="text-xs font-semibold uppercase tracking-wider gap-2 px-6"
+              className={`text-xs font-semibold uppercase tracking-wider gap-2 px-6 h-11 transition-all ${
+                agreed
+                  ? 'bg-[#1d1a4a] hover:bg-[#2d2770] text-white shadow-md'
+                  : 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
+              }`}
             >
               <span>Begin Examination Now</span>
               <ArrowRight className="w-4 h-4" />

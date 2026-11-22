@@ -1,17 +1,74 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:is(.dark *));
+
 @layer base {
   :root {
-    --background: #ffffff;
-    --foreground: #0f172a;
-    --muted: #f8fafc;
-    --muted-foreground: #64748b;
-    --border: #e2e8f0;
-    --input: #e2e8f0;
-    --primary: #0f172a;
+    --background: #faf9fe;
+    --foreground: #1d1a4a;
+    --card: #ffffff;
+    --card-foreground: #1d1a4a;
+    --muted: #f2f0fd;
+    --muted-foreground: #706b9b;
+    --border: #e6e3f8;
+    --input: #e6e3f8;
+    --primary: #1d1a4a;
     --primary-foreground: #ffffff;
-    --accent: #f1f5f9;
-    --accent-foreground: #0f172a;
+    --accent: #eeeaff;
+    --accent-foreground: #1d1a4a;
+
+    /* Sakuga VFX Custom Property Palette */
+    --sk-card: #ffffff;
+    --sk-ink: #1d1a4a;
+    --sk-dim: #8580b0;
+    --sk-soft: #b8b3ff;
+    --sk-pri: #8f8df7;
+    --sk-pri-ink: #1d1a4a;
+    --sk-acc: #ff5fa8;
+    --sk-track: #c9cbe0;
+    --sk-r: 15px;
+    --sk-bw: 3.2px;
+    --sk-sh: 6px 7px 0 var(--sk-soft);
+    --sk-btn-sh: var(--sk-sh);
+    --sk-btn-line: var(--sk-ink);
+    --sk-alt-sh: 5px 6px 0 var(--sk-soft);
+    --sk-alt-line: var(--sk-ink);
+    --sk-tick: var(--sk-ink);
+    --sk-fill: var(--sk-acc);
+    --sk-on-pri: #ffffff;
+  }
+
+  .dark {
+    --background: #0d0c1d;
+    --foreground: #f4f3ff;
+    --card: #15132d;
+    --card-foreground: #f4f3ff;
+    --muted: #1e1b3d;
+    --muted-foreground: #a4a0c8;
+    --border: #2c2854;
+    --input: #2c2854;
+    --primary: #b8b3ff;
+    --primary-foreground: #0d0c1d;
+    --accent: #24204d;
+    --accent-foreground: #f4f3ff;
+
+    /* Sakuga VFX Custom Property Palette (Dark Mode) */
+    --sk-card: #15132d;
+    --sk-ink: #f4f3ff;
+    --sk-dim: #a4a0c8;
+    --sk-soft: #635bff;
+    --sk-pri: #8f8df7;
+    --sk-pri-ink: #ffffff;
+    --sk-acc: #ff5fa8;
+    --sk-track: #353066;
+    --sk-sh: 6px 7px 0 rgba(184, 179, 255, 0.4);
+    --sk-btn-sh: var(--sk-sh);
+    --sk-btn-line: #b8b3ff;
+    --sk-alt-sh: 5px 6px 0 rgba(184, 179, 255, 0.25);
+    --sk-alt-line: #8580b0;
+    --sk-tick: #b8b3ff;
+    --sk-fill: var(--sk-acc);
+    --sk-on-pri: #ffffff;
   }
 
   body {
@@ -20,6 +77,17 @@
     font-family: var(--font-inter), system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    overflow-x: hidden;
+    width: 100%;
+    max-width: 100vw;
+    touch-action: manipulation;
+  }
+
+  html {
+    touch-action: manipulation;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
   }
 
   code, kbd, samp, pre {
@@ -27,10 +95,17 @@
   }
 }
 
+/* Prevent unwanted automatic zoom-in on mobile form inputs */
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Custom subtle scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -38,10 +113,18 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: #c7c4e8;
   border-radius: 9999px;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+  background: #3e3870;
+}
+
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #a49fe0;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #524a91;
 }

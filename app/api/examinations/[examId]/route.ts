@@ -18,3 +18,17 @@ export async function GET(
   }
 }
 
+export async function DELETE(
+  req: Request,
+  { params }: { params: Promise<{ examId: string }> }
+) {
+  try {
+    const { examId } = await params;
+    await db.deleteExamination(examId);
+    return NextResponse.json({ success: true, message: 'Examination deleted' });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Server error';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}
+

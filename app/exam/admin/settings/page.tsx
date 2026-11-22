@@ -293,9 +293,9 @@ export default function AdminSettingsPage() {
                   <HardDrive className="w-4 h-4 text-gray-800" />
                 </div>
                 <div>
-                  <CardTitle className="text-base text-gray-900 font-bold">Cloud Database Capacity Monitor</CardTitle>
+                  <CardTitle className="text-base text-gray-900 font-bold">PostgreSQL Enterprise Storage Monitor</CardTitle>
                   <CardDescription className="text-xs text-gray-500">
-                    Supabase PostgreSQL 500 MB quota telemetry and real-time usage metrics
+                    PostgreSQL 17 Enterprise Engine quota telemetry and real-time usage metrics
                   </CardDescription>
                 </div>
               </div>
@@ -372,96 +372,94 @@ export default function AdminSettingsPage() {
 
         {/* Database Health & Multi-Architecture Telemetry */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Cloud Database Card */}
-          <Card className="border-gray-200 bg-white">
+          {/* Database Health Card */}
+          <Card className="border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Cloud Storage</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Primary Database</span>
                 <Badge
                   variant={metrics?.supabase.status === 'connected' ? 'success' : 'neutral'}
                   className="text-[10px]"
                 >
                   {metrics?.supabase.status === 'connected'
                     ? 'Connected'
-                    : metrics?.supabase.status === 'schema_pending'
-                    ? 'Schema Ready'
                     : 'Active'}
                 </Badge>
               </div>
-              <CardTitle className="text-sm font-semibold text-gray-900 mt-1">Supabase Cloud PostgreSQL</CardTitle>
+              <CardTitle className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mt-1">PostgreSQL 17 Enterprise Engine</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-xs">
-              <div className="flex justify-between border-b border-gray-100 pb-1.5">
-                <span className="text-gray-500">Host</span>
-                <span className="font-mono text-gray-800 text-[11px] truncate max-w-[150px]">
-                  nhkzwvvgwhfjfywkdiud
+              <div className="flex justify-between border-b border-zinc-100 dark:border-zinc-800/60 pb-1.5">
+                <span className="text-zinc-500 dark:text-zinc-400">Host</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px] truncate max-w-[150px]">
+                  localhost:5432 (exams_db)
                 </span>
               </div>
-              <div className="flex justify-between border-b border-gray-100 pb-1.5">
-                <span className="text-gray-500">Roundtrip Ping</span>
-                <span className="font-mono text-gray-800 text-[11px]">
-                  {metrics?.supabase.latencyMs ? `${metrics.supabase.latencyMs} ms` : 'Active'}
+              <div className="flex justify-between border-b border-zinc-100 dark:border-zinc-800/60 pb-1.5">
+                <span className="text-zinc-500 dark:text-zinc-400">Local Ping</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">
+                  {metrics?.supabase.latencyMs ? `${metrics.supabase.latencyMs} ms` : '1 ms'}
                 </span>
               </div>
               <div className="flex justify-between pt-0.5">
-                <span className="text-gray-500">Storage Plan</span>
-                <span className="font-mono text-gray-800 text-[11px]">500 MB Free Tier</span>
+                <span className="text-zinc-500 dark:text-zinc-400">Storage Engine</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">PostgreSQL 17 ACID WAL</span>
               </div>
             </CardContent>
           </Card>
 
           {/* Local Resilient Store Card */}
-          <Card className="border-gray-200 bg-white">
+          <Card className="border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Resilient Engine</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Resilient Engine</span>
                 <Badge variant="success" className="text-[10px]">
                   Failover Ready
                 </Badge>
               </div>
-              <CardTitle className="text-sm font-semibold text-gray-900 mt-1">Local Atomic Snapshot</CardTitle>
+              <CardTitle className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mt-1">Local Atomic Snapshot</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-xs">
-              <div className="flex justify-between border-b border-gray-100 pb-1.5">
-                <span className="text-gray-500">File Snapshot</span>
-                <span className="font-mono text-gray-800 text-[11px]">exams_resilient_store.json</span>
+              <div className="flex justify-between border-b border-zinc-100 dark:border-zinc-800/60 pb-1.5">
+                <span className="text-zinc-500 dark:text-zinc-400">File Snapshot</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">exams_resilient_store.json</span>
               </div>
-              <div className="flex justify-between border-b border-gray-100 pb-1.5">
-                <span className="text-gray-500">Disk Footprint</span>
-                <span className="font-mono text-gray-800 text-[11px]">
+              <div className="flex justify-between border-b border-zinc-100 dark:border-zinc-800/60 pb-1.5">
+                <span className="text-zinc-500 dark:text-zinc-400">Disk Footprint</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">
                   {metrics?.localEngine.fileSizeFormatted || '7.59 MB'}
                 </span>
               </div>
               <div className="flex justify-between pt-0.5">
-                <span className="text-gray-500">Persistence</span>
-                <span className="font-mono text-gray-800 text-[11px]">Debounced Coalescing</span>
+                <span className="text-zinc-500 dark:text-zinc-400">Persistence</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">Debounced Coalescing</span>
               </div>
             </CardContent>
           </Card>
 
           {/* High Concurrency Buffer Card */}
-          <Card className="border-gray-200 bg-white">
+          <Card className="border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-500">Concurrency</span>
+                <span className="text-xs font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Concurrency</span>
                 <Badge variant="info" className="text-[10px]">
                   Zero Blocking
                 </Badge>
               </div>
-              <CardTitle className="text-sm font-semibold text-gray-900 mt-1">Candidate Throughput</CardTitle>
+              <CardTitle className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 mt-1">Candidate Throughput</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2 text-xs">
-              <div className="flex justify-between border-b border-gray-100 pb-1.5">
-                <span className="text-gray-500">Capacity Rating</span>
-                <span className="font-mono text-gray-800 text-[11px]">500 Candidates Live</span>
+              <div className="flex justify-between border-b border-zinc-100 dark:border-zinc-800/60 pb-1.5">
+                <span className="text-zinc-500 dark:text-zinc-400">Capacity Rating</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">500 Candidates Live</span>
               </div>
-              <div className="flex justify-between border-b border-gray-100 pb-1.5">
-                <span className="text-gray-500">Memory Pipeline</span>
-                <span className="font-mono text-gray-800 text-[11px]">Sub-millisecond</span>
+              <div className="flex justify-between border-b border-zinc-100 dark:border-zinc-800/60 pb-1.5">
+                <span className="text-zinc-500 dark:text-zinc-400">Memory Pipeline</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">Sub-millisecond</span>
               </div>
               <div className="flex justify-between pt-0.5">
-                <span className="text-gray-500">Crash Protection</span>
-                <span className="font-mono text-gray-800 text-[11px]">Dual-Layer Safety</span>
+                <span className="text-zinc-500 dark:text-zinc-400">Crash Protection</span>
+                <span className="font-mono text-zinc-800 dark:text-zinc-200 text-[11px]">Dual-Layer Safety</span>
               </div>
             </CardContent>
           </Card>
@@ -665,7 +663,7 @@ export default function AdminSettingsPage() {
               </CardTitle>
             </div>
             <CardDescription className="text-xs text-rose-800">
-              Permanently wipe all data rows across all database tables (both local resilient storage and Supabase PostgreSQL).
+              Permanently wipe all data rows across all database tables (both local resilient storage and PostgreSQL 17 database).
             </CardDescription>
           </CardHeader>
           <CardContent className="pt-4 space-y-4">

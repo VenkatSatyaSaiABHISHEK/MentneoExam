@@ -31,7 +31,10 @@ import {
   Save,
   Code2,
   Terminal,
+  FileSpreadsheet,
+  Download,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { toast } from 'sonner';
 import { Question, OCRJob, Difficulty, Examination, ExaminationRound } from '@/types';
 
@@ -56,6 +59,10 @@ function RoundQuestionsContent() {
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
   const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
+
+  // Excel & CSV Bulk Import state
+  const [excelImportModalOpen, setExcelImportModalOpen] = React.useState(false);
+  const [importingExcel, setImportingExcel] = React.useState(false);
 
   // Manual Question Create/Edit state
   const [createModalOpen, setCreateModalOpen] = React.useState(false);
@@ -434,6 +441,117 @@ function RoundQuestionsContent() {
     }
   };
 
+  // Download Sample Question Bank Template (Excel or CSV)
+  const handleDownloadExcelTemplate = (format: 'xlsx' | 'csv' = 'xlsx') => {
+    const templateRows = [
+      {
+        'Question Text': 'What is the average case time complexity of searching in a balanced binary search tree?',
+        'Option A': 'O(1)',
+        'Option B': 'O(log n)',
+        'Option C': 'O(n)',
+        'Option D': 'O(n log n)',
+        'Correct Option (A/B/C/D)': 'B',
+        'Marks': round?.marks_per_question ?? 1,
+        'Negative Marks': round?.negative_marks ?? 0,
+        'Difficulty (easy/medium/hard)': 'medium',
+        'Explanation': 'A balanced BST divides search space in half at each step, yielding logarithmic time.'
+      },
+      {
+        'Question Text': 'Which data structure follows the Last-In First-Out (LIFO) access principle?',
+        'Option A': 'Queue',
+        'Option B': 'Array',
+        'Option C': 'Stack',
+        'Option D': 'Linked List',
+        'Correct Option (A/B/C/D)': 'C',
+        'Marks': round?.marks_per_question ?? 1,
+        'Negative Marks': round?.negative_marks ?? 0,
+        'Difficulty (easy/medium/hard)': 'easy',
+        'Explanation': 'Stacks operate on the LIFO principle where the last inserted element is removed first.'
+      }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Questions');
+
+    if (format === 'csv') {
+      XLSX.writeFile(wb, `round_${round?.round_number || 1}_questions_template.csv`, { bookType: 'csv' });
+    } else {
+      XLSX.writeFile(wb, `round_${round?.round_number || 1}_questions_template.xlsx`);
+    }
+    toast.success(`Downloaded question ${format.toUpperCase()} template.`);
+  };
+
+  // Bulk Import Questions from Excel (.xlsx/.xls) or CSV
+  const handleExcelImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !round) return;
+
+    setImportingExcel(true);
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+      if (jsonRows.length === 0) {
+        toast.error('The selected file contains no readable question rows.');
+        return;
+      }
+
+      let importedCount = 0;
+      for (const row of jsonRows) {
+        const qText = String(row['Question Text'] || row['question_text'] || row['Question'] || row['question'] || '').trim();
+        if (!qText) continue;
+
+        const optA = String(row['Option A'] || row['option_a'] || row['A'] || row['a'] || '').trim();
+        const optB = String(row['Option B'] || row['option_b'] || row['B'] || row['b'] || '').trim();
+        const optC = String(row['Option C'] || row['option_c'] || row['C'] || row['c'] || '').trim();
+        const optD = String(row['Option D'] || row['option_d'] || row['D'] || row['d'] || '').trim();
+
+        const correctRaw = String(row['Correct Option (A/B/C/D)'] || row['correct_option'] || row['Answer'] || row['Correct'] || 'A').trim().toUpperCase();
+        const correctLetter = ['A', 'B', 'C', 'D'].includes(correctRaw) ? correctRaw : 'A';
+
+        const marks = Number(row['Marks'] || row['marks'] || round.marks_per_question || 1);
+        const negMarks = Number(row['Negative Marks'] || row['negative_marks'] || round.negative_marks || 0);
+        const diffRaw = String(row['Difficulty (easy/medium/hard)'] || row['difficulty'] || 'medium').toLowerCase();
+        const difficulty = ['easy', 'medium', 'hard'].includes(diffRaw) ? diffRaw : 'medium';
+
+        const payload = {
+          examination_id: examId,
+          round_id: roundId,
+          question_text: qText,
+          difficulty,
+          marks,
+          negative_marks: negMarks,
+          options: [
+            { label: 'A', option_text: optA, is_correct: correctLetter === 'A' },
+            { label: 'B', option_text: optB, is_correct: correctLetter === 'B' },
+            { label: 'C', option_text: optC, is_correct: correctLetter === 'C' },
+            { label: 'D', option_text: optD, is_correct: correctLetter === 'D' },
+          ].filter((o) => Boolean(o.option_text)),
+        };
+
+        const res = await fetch('/api/questions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) importedCount++;
+      }
+
+      toast.success(`Successfully imported ${importedCount} questions from ${file.name}.`);
+      setExcelImportModalOpen(false);
+      await fetchRoundData();
+    } catch (err: any) {
+      toast.error('Failed to parse file: ' + (err.message || 'Unknown format error'));
+    } finally {
+      setImportingExcel(false);
+      e.target.value = '';
+    }
+  };
+
   // Open Edit / Create
   const handleOpenCreate = () => {
     setEditingQuestion(null);
@@ -659,6 +777,16 @@ function RoundQuestionsContent() {
                 >
                   <Upload className="w-3.5 h-3.5" />
                   <span>Upload PDF for Round {round?.round_number || 1}</span>
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setExcelImportModalOpen(true)}
+                  className="text-xs uppercase tracking-wider font-semibold gap-1.5 border-emerald-300 text-emerald-800 hover:bg-emerald-50 cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Import Excel / CSV</span>
                 </Button>
 
                 <Button
@@ -1371,6 +1499,83 @@ Supported Languages: Python 3 or Java (OpenJDK). Write your implementation in th
             </Button>
           </div>
         </form>
+      </Dialog>
+
+      {/* Excel and CSV Question Bank Import Modal */}
+      <Dialog
+        isOpen={excelImportModalOpen}
+        onClose={() => setExcelImportModalOpen(false)}
+        title={`Bulk Import Questions to Round ${round?.round_number || 1}`}
+        description="Upload a structured Excel sheet (.xlsx, .xls) or CSV file with question stems, choices, marks, and answer keys."
+        maxWidth="xl"
+      >
+        <div className="space-y-5">
+          {/* Template Download Section */}
+          <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/60 space-y-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-bold text-emerald-950 uppercase tracking-wider">Download Sample Template</h4>
+                <p className="text-[11px] text-emerald-800">Use this pre-formatted template with standard question and choice columns.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDownloadExcelTemplate('xlsx')}
+                  className="h-7 text-[11px] font-semibold gap-1 bg-white border-emerald-300 text-emerald-900 hover:bg-emerald-100"
+                >
+                  <Download className="w-3 h-3 text-emerald-700" />
+                  <span>Excel (.xlsx)</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDownloadExcelTemplate('csv')}
+                  className="h-7 text-[11px] font-semibold gap-1 bg-white border-emerald-300 text-emerald-900 hover:bg-emerald-100"
+                >
+                  <Download className="w-3 h-3 text-emerald-700" />
+                  <span>CSV (.csv)</span>
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Upload Area */}
+          <div className="border-2 border-dashed border-gray-300 hover:border-emerald-500 rounded-xl p-6 text-center space-y-3 transition-colors bg-white">
+            <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+              <FileSpreadsheet className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-gray-900">Select Question Bank Spreadsheet</p>
+              <p className="text-[11px] text-gray-500 mt-0.5">Supports Microsoft Excel (.xlsx, .xls) and CSV (.csv)</p>
+            </div>
+
+            <label className="inline-block">
+              <input
+                type="file"
+                accept=".xlsx, .xls, .csv"
+                disabled={importingExcel}
+                onChange={handleExcelImportFile}
+                className="hidden"
+              />
+              <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gray-900 hover:bg-black text-white text-xs font-semibold uppercase tracking-wider cursor-pointer shadow-xs">
+                {importingExcel ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Parsing &amp; Importing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Browse &amp; Import Spreadsheet</span>
+                  </>
+                )}
+              </span>
+            </label>
+          </div>
+        </div>
       </Dialog>
     </AdminLayoutWrapper>
   );

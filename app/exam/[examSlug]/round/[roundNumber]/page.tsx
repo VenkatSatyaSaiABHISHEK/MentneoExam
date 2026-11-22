@@ -23,6 +23,7 @@ import {
   CheckCheck,
   Database,
   Maximize2,
+  Keyboard,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -34,6 +35,7 @@ import { SystemClockTelemetry } from '@/components/common/system-clock-telemetry
 import { formatTimeRemaining, cn } from '@/lib/utils';
 import { Question, ExaminationAttempt, AttemptAnswer, Student, ExaminationRound } from '@/types';
 import { offlineSync, QueuedAnswer } from '@/lib/exam/offline-sync';
+import { sounds } from '@/lib/audio/sound-effects';
 
 function ExaminationEngineContent() {
   const params = useParams();
@@ -81,6 +83,37 @@ function ExaminationEngineContent() {
   const [submitModalOpen, setSubmitModalOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [mobilePaletteOpen, setMobilePaletteOpen] = React.useState(false);
+  const [pingLatency, setPingLatency] = React.useState<number | null>(18);
+
+  // Pre-Round 3 (Coding) Briefing Modal state
+  const [briefingModalOpen, setBriefingModalOpen] = React.useState(false);
+  const [briefingCountdown, setBriefingCountdown] = React.useState(15);
+  const [briefingConfirmed, setBriefingConfirmed] = React.useState(false);
+
+  // Periodic Campus Wi-Fi Latency Measurement
+  React.useEffect(() => {
+    let mounted = true;
+    async function measurePing() {
+      try {
+        const start = performance.now();
+        const res = await fetch('/api/ping');
+        if (res.ok && mounted) {
+          const lat = Math.round(performance.now() - start);
+          setPingLatency(lat);
+        } else if (mounted) {
+          setPingLatency(null);
+        }
+      } catch {
+        if (mounted) setPingLatency(null);
+      }
+    }
+    measurePing();
+    const interval = setInterval(measurePing, 15000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // 1. Initial Load: Register / Start Attempt
   React.useEffect(() => {
@@ -213,6 +246,17 @@ function ExaminationEngineContent() {
 
         if (att.status === 'submitted' || att.status === 'timed_out' || att.status === 'terminated') {
           router.push(`/exam/${slug}/result?attemptId=${att.id}`);
+          return;
+        }
+
+        // Trigger Pre-Round Briefing for Coding rounds (Round 3)
+        const isCoding = round.round_type === 'coding' || roundNum === 3;
+        if (isCoding && typeof window !== 'undefined') {
+          const alreadyDismissed = sessionStorage.getItem(`briefing_acknowledged_${att.id}`);
+          if (!alreadyDismissed) {
+            setBriefingModalOpen(true);
+            setBriefingCountdown(15);
+          }
         }
       } catch {
         toast.error('Network initialization failed.');
@@ -224,12 +268,40 @@ function ExaminationEngineContent() {
     initEngine();
   }, [slug, roundNum, router]);
 
+  // Briefing 15-second countdown timer
+  React.useEffect(() => {
+    if (!briefingModalOpen || briefingCountdown <= 0) return;
+    const interval = setInterval(() => {
+      setBriefingCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [briefingModalOpen, briefingCountdown]);
+
+  const handleDismissBriefing = () => {
+    if (attempt) {
+      sessionStorage.setItem(`briefing_acknowledged_${attempt.id}`, 'true');
+    }
+    setBriefingModalOpen(false);
+    try {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    } catch {}
+    toast.success('Coding Workspace Active. Best of luck!');
+  };
+
   // 2. Authoritative Timer Countdown & Submit Unlock Timer
   React.useEffect(() => {
     if (loading || !attempt || attempt.status !== 'in_progress') return;
 
     const timer = setInterval(() => {
       setSecondsRemaining((prev) => {
+        if (prev === 300) {
+          try {
+            sounds.playTimerAlert();
+            toast.warning('5 minutes remaining in this round.', { duration: 4000 });
+          } catch {}
+        }
         if (prev <= 1) {
           clearInterval(timer);
           handleForceAutoSubmit('Deadline expired. Examination auto-submitted by authoritative timer.');
@@ -291,6 +363,9 @@ function ExaminationEngineContent() {
           setMaxWarnings(maxW);
           setViolationReason(label);
           setWarningModalOpen(true);
+          try {
+            sounds.playInfractionWarning();
+          } catch {}
 
           if (term) {
             setIsTerminated(true);
@@ -712,6 +787,121 @@ function ExaminationEngineContent() {
   const isCodingRound = currentRound?.round_type === 'coding' || currentQuestion?.question_type === 'coding';
   const isAiAllowed = currentRound?.allow_tab_switch === true;
 
+  // MCQ Keyboard Hotkeys listener (Completely silent: zero audio effects)
+  React.useEffect(() => {
+    // Hotkeys are only active for MCQs (not coding), when an attempt is active, and no dialogs are open
+    if (
+      isCodingRound ||
+      loading ||
+      !attempt ||
+      isTerminated ||
+      warningModalOpen ||
+      submitModalOpen ||
+      mobilePaletteOpen ||
+      fullscreenPromptOpen ||
+      briefingModalOpen
+    ) {
+      return;
+    }
+
+    const handleExamKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input, textarea, contenteditable, or code editor
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable ||
+          target.closest('.monaco-editor'))
+      ) {
+        return;
+      }
+
+      // Do not intercept browser shortcuts (Ctrl+..., Alt+..., Meta+...)
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        return;
+      }
+
+      const key = e.key;
+
+      // 1. Navigation: Next question [N] or [ArrowRight]
+      if (key === 'ArrowRight' || key === 'n' || key === 'N') {
+        e.preventDefault();
+        setCurrentIndex((prev) => Math.min(questions.length - 1, prev + 1));
+        return;
+      }
+
+      // 2. Navigation: Previous question [P] or [ArrowLeft]
+      if (key === 'ArrowLeft' || key === 'p' || key === 'P') {
+        e.preventDefault();
+        setCurrentIndex((prev) => Math.max(0, prev - 1));
+        return;
+      }
+
+      // 3. Mark for Review: [M]
+      if (key === 'm' || key === 'M') {
+        e.preventDefault();
+        handleToggleMarkReview();
+        return;
+      }
+
+      // 4. Clear Answer: [Delete] or [Backspace]
+      if (key === 'Delete' || key === 'Backspace') {
+        if (currentAnswer?.selected_option) {
+          e.preventDefault();
+          handleClearAnswer();
+        }
+        return;
+      }
+
+      // 5. Option Selection: A, B, C, D, ... or 1, 2, 3, 4, ...
+      if (currentQuestion && currentQuestion.options && currentQuestion.options.length > 0) {
+        const upperKey = key.toUpperCase();
+        const numIndex = parseInt(key, 10);
+
+        // Check matching label (e.g. 'A', 'B', 'C', 'D')
+        const matchedByLabel = currentQuestion.options.find(
+          (opt) => opt.label.toUpperCase() === upperKey
+        );
+        if (matchedByLabel) {
+          e.preventDefault();
+          handleSelectOption(matchedByLabel.label);
+          return;
+        }
+
+        // Check matching number (1..N)
+        if (!isNaN(numIndex) && numIndex >= 1 && numIndex <= currentQuestion.options.length) {
+          e.preventDefault();
+          const targetOpt = currentQuestion.options[numIndex - 1];
+          if (targetOpt) {
+            handleSelectOption(targetOpt.label);
+            return;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleExamKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleExamKeyDown);
+    };
+  }, [
+    isCodingRound,
+    loading,
+    attempt,
+    isTerminated,
+    warningModalOpen,
+    submitModalOpen,
+    mobilePaletteOpen,
+    fullscreenPromptOpen,
+    briefingModalOpen,
+    currentIndex,
+    questions,
+    currentQuestion,
+    currentAnswer,
+  ]);
+
   // Counts for summary
   const answeredCount = questions.filter((q) => {
     const a = answers[q.id];
@@ -756,6 +946,19 @@ function ExaminationEngineContent() {
           {/* Quick status pill, Live Telemetry Clock and submit button */}
           <div className="flex items-center gap-3">
             <SystemClockTelemetry showDatabaseStatus={false} className="hidden lg:inline-flex" />
+
+            {/* Live Campus Wi-Fi Latency Pill */}
+            {pingLatency !== null ? (
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono text-emerald-800 bg-emerald-50/80 border border-emerald-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{pingLatency}ms Campus Wi-Fi</span>
+              </span>
+            ) : (
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono text-amber-800 bg-amber-50 border border-amber-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>Local Buffer Active</span>
+              </span>
+            )}
 
             {isAiAllowed ? (
               <Badge variant="info" size="sm" className="hidden sm:inline-flex gap-1">
@@ -829,6 +1032,31 @@ function ExaminationEngineContent() {
         </div>
       </header>
 
+      {/* Resilient Network Offline Reassurance Banner */}
+      {syncStatus === 'offline' && (
+        <div className="bg-amber-500/10 border-b border-amber-300 px-4 py-3 text-xs text-amber-950">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-600 animate-pulse shrink-0" />
+              <div>
+                <p className="font-bold text-amber-950">
+                  Local Offline Buffer Active ({pendingCount} pending updates queued)
+                </p>
+                <p className="text-[11px] text-amber-800">
+                  Network instability detected. Do not panic: your code and answers are safely cached on this device (0ms latency) and will auto-sync with the server the instant connection stabilizes.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => flushPendingAnswers()}
+              className="text-[11px] font-mono font-bold uppercase tracking-wider px-2.5 py-1 bg-amber-200 text-amber-900 rounded border border-amber-300 hover:bg-amber-300 transition-colors shrink-0"
+            >
+              Retry Sync Now
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Prominent AI Permitted Banner */}
       {isAiAllowed && (
         <div className="bg-sky-50 border-b border-sky-200 px-4 py-2.5 text-xs text-sky-950">
@@ -846,15 +1074,15 @@ function ExaminationEngineContent() {
         {/* ========================================================= */}
         {/* MAIN WORKSPACE: SPACIOUS QUESTION CARD (8 OF 12 COLS)     */}
         {/* ========================================================= */}
-        <main className="lg:col-span-8 flex flex-col bg-white border border-gray-200 rounded-2xl p-6 sm:p-8 md:p-10 shadow-xs min-h-[580px]">
+        <main className="lg:col-span-8 flex flex-col bg-white dark:bg-[#15132d] border border-[#e6e3f8] dark:border-[#2c2854] rounded-2xl p-6 sm:p-8 md:p-10 shadow-[0_4px_24px_rgba(184,179,255,0.08)] min-h-[580px]">
           {currentQuestion ? (
             isCodingRound ? (
               /* Coding Sandbox Interface */
               <div className="flex-1 flex flex-col">
-                <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-4">
+                <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-gray-800 mb-4">
                   <div className="flex items-center gap-2">
-                    <FileCode className="w-4 h-4 text-gray-700" />
-                    <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-gray-900 text-white">
+                    <FileCode className="w-4 h-4 text-[#1d1a4a] dark:text-[#b8b3ff]" />
+                    <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d]">
                       Coding Problem {currentIndex + 1}
                     </span>
                     <Badge variant="neutral">{currentQuestion.difficulty}</Badge>
@@ -877,28 +1105,28 @@ function ExaminationEngineContent() {
               /* Standard MCQ Interface */
               <div className="flex-1 flex flex-col">
                 {/* Question Meta Bar */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-gray-100 mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#e6e3f8] dark:border-[#2c2854] mb-6">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-gray-900 text-white">
+                    <span className="text-xs font-bold font-mono px-2.5 py-1 rounded-lg bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] shadow-xs">
                       Q {currentIndex + 1} of {questions.length}
                     </span>
                     <Badge variant="neutral">{currentQuestion.difficulty}</Badge>
-                    <span className="text-xs text-gray-500 font-mono">
+                    <span className="text-xs text-[#554e80] dark:text-[#a8a1dc] font-mono">
                       +{currentQuestion.marks} / -{currentQuestion.negative_marks} marks
                     </span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {/* WhatsApp-style Question Status Indicator */}
+                    {/* Live Answer Status Indicator */}
                     {currentAnswer?.selected_option && (
-                      <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono border">
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono border border-[#e6e3f8] dark:border-[#2c2854] bg-[#f8f7fe] dark:bg-[#1a1738]">
                         {questionSyncMap[currentQuestion.id] === 'synced' ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50/80 font-semibold">
-                            <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300 font-semibold">
+                            <CheckCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                             <span>Cloud Synced</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-50 font-medium">
+                          <span className="inline-flex items-center gap-1 text-[#554e80] dark:text-[#a8a1dc] font-medium">
                             <Check className="w-3.5 h-3.5 text-slate-400" />
                             <span>Device Saved (0ms)</span>
                           </span>
@@ -906,91 +1134,143 @@ function ExaminationEngineContent() {
                       </div>
                     )}
 
-                    {savingAnswer && <span className="text-[11px] text-gray-400 animate-pulse font-mono">Saving...</span>}
+                    {savingAnswer && <span className="text-[11px] text-[#7871a8] animate-pulse font-mono">Saving...</span>}
 
                     <button
                       onClick={handleToggleMarkReview}
                       className={cn(
-                        'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors cursor-pointer',
+                        'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer',
                         currentAnswer?.is_marked_for_review
-                          ? 'border-amber-300 bg-amber-50 text-amber-800'
-                          : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                          ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200'
+                          : 'border-[#e6e3f8] dark:border-[#2c2854] text-[#554e80] dark:text-[#a8a1dc] hover:bg-[#f0effe] dark:hover:bg-[#232049]'
                       )}
                     >
                       <BookmarkCheck className="w-3.5 h-3.5" />
                       <span>{currentAnswer?.is_marked_for_review ? 'Marked' : 'Mark for Review'}</span>
+                      <kbd className="hidden sm:inline px-1 py-0.2 rounded bg-black/5 dark:bg-white/10 text-[9px] font-mono">M</kbd>
                     </button>
                   </div>
                 </div>
 
                 {/* Question Text */}
-                <div className="text-base sm:text-lg font-medium text-gray-900 leading-relaxed">
+                <div className="text-base sm:text-lg font-medium text-[#1d1a4a] dark:text-[#f4f3ff] leading-relaxed">
                   {currentQuestion.question_text}
                 </div>
 
                 {/* Options List */}
-                <div className="mt-8 space-y-3 flex-1">
-                  {(currentQuestion.options || []).map((opt) => {
+                <div className="mt-8 space-y-3 flex-1" role="radiogroup" aria-label="Question choices">
+                  {(currentQuestion.options || []).map((opt, optIndex) => {
                     const isSelected = currentAnswer?.selected_option === opt.label;
                     const isSynced = questionSyncMap[currentQuestion.id] === 'synced';
+                    const hotkeyDigit = optIndex < 9 ? String(optIndex + 1) : null;
                     return (
                       <button
                         key={opt.id}
                         type="button"
+                        role="radio"
+                        aria-checked={isSelected}
                         onClick={() => handleSelectOption(opt.label)}
                         className={cn(
-                          'w-full flex items-center justify-between gap-4 p-4 rounded-xl border text-left transition-all cursor-pointer group',
+                          'w-full flex items-center justify-between gap-4 p-4 sm:p-5 rounded-2xl border text-left transition-all duration-200 cursor-pointer group relative',
                           isSelected
-                            ? 'border-gray-900 bg-gray-900 text-white shadow-xs'
-                            : 'border-gray-200 bg-white text-gray-800 hover:border-gray-400 hover:bg-gray-50/50'
+                            ? 'border-[#1d1a4a] dark:border-[#b8b3ff] bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] shadow-[0_8px_24px_rgba(29,26,74,0.18)] dark:shadow-[0_8px_24px_rgba(184,179,255,0.22)] -translate-y-0.5'
+                            : 'border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] text-[#1d1a4a] dark:text-[#f4f3ff] hover:border-[#b8b3ff] hover:bg-[#faf9fe] dark:hover:bg-[#1c193b] hover:shadow-[0_4px_16px_rgba(184,179,255,0.12)] hover:-translate-y-0.5'
                         )}
                       >
                         <div className="flex items-center gap-4 flex-1">
                           <span
                             className={cn(
-                              'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold font-mono shrink-0 transition-colors',
+                              'w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black font-mono shrink-0 transition-colors shadow-xs',
                               isSelected
-                                ? 'bg-white text-gray-900'
-                                : 'border border-gray-300 bg-gray-50 text-gray-700 group-hover:border-gray-400'
+                                ? 'bg-[#b8b3ff] dark:bg-[#1d1a4a] text-[#1d1a4a] dark:text-[#f4f3ff]'
+                                : 'border border-[#d5d0f5] dark:border-[#3a3568] bg-[#f5f4ff] dark:bg-[#1d1a42] text-[#1d1a4a] dark:text-[#b8b3ff] group-hover:border-[#b8b3ff] group-hover:bg-[#ebe8ff]'
                             )}
                           >
                             {opt.label}
                           </span>
-                          <span className="text-sm font-medium leading-snug">{opt.option_text}</span>
+                          <span
+                            className={cn(
+                              'text-sm sm:text-base font-medium leading-relaxed',
+                              isSelected
+                                ? 'text-white dark:text-[#0d0c1d] font-semibold'
+                                : 'text-[#1d1a4a] dark:text-[#e4e2fd]'
+                            )}
+                          >
+                            {opt.option_text}
+                          </span>
                         </div>
 
-                        {isSelected && (
-                          <div className="shrink-0 flex items-center gap-1 font-mono text-xs">
-                            {isSynced ? (
-                              <span className="inline-flex items-center gap-1 text-emerald-300 bg-white/10 px-2 py-0.5 rounded text-[11px] font-semibold">
-                                <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
-                                <span>Synced</span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-slate-300 bg-white/10 px-2 py-0.5 rounded text-[11px]">
-                                <Check className="w-3.5 h-3.5 text-slate-300" />
-                                <span>Saved</span>
-                              </span>
+                        <div className="shrink-0 flex items-center gap-2">
+                          {/* Keyboard hotkey hint badge */}
+                          <span
+                            className={cn(
+                              'hidden sm:inline-flex items-center gap-1 font-mono text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md transition-colors',
+                              isSelected
+                                ? 'bg-white/20 dark:bg-black/20 text-white/90 dark:text-black/80'
+                                : 'bg-[#f5f4ff] dark:bg-[#1c193b] text-[#7871a8] dark:text-[#a59ed8] border border-[#e6e3f8] dark:border-[#2c2854] group-hover:border-[#b8b3ff]/50'
                             )}
-                          </div>
-                        )}
+                          >
+                            Key {opt.label}{hotkeyDigit ? ` / ${hotkeyDigit}` : ''}
+                          </span>
+
+                          {/* WhatsApp-style live sync status chip */}
+                          {isSelected && (
+                            <div className="flex items-center gap-1 font-mono text-xs">
+                              {isSynced ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-300 dark:text-emerald-950 bg-white/15 dark:bg-emerald-950/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                                  <CheckCheck className="w-3.5 h-3.5 text-emerald-300 dark:text-emerald-950" />
+                                  <span>Synced</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-purple-200 dark:text-purple-950 bg-white/15 dark:bg-purple-950/20 px-2 py-0.5 rounded-md text-[11px]">
+                                  <Check className="w-3.5 h-3.5 text-purple-200 dark:text-purple-950" />
+                                  <span>Saved</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </button>
                     );
                   })}
                 </div>
 
+                {/* Keyboard Hotkey Cheatsheet banner strip */}
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-[#f8f7fe] dark:bg-[#171533] border border-[#e6e3f8] dark:border-[#2c2854] text-[11px] text-[#554e80] dark:text-[#a8a1dc]">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <Keyboard className="w-3.5 h-3.5 text-[#6355d8] shrink-0" />
+                    <span className="font-semibold text-[#1d1a4a] dark:text-[#e4e2fd]">Hotkeys:</span>
+                    <span className="hidden sm:inline">Press</span>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">A</kbd>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">B</kbd>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">C</kbd>
+                    <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">D</kbd>
+                    <span className="text-[#8881b8] dark:text-[#7d76b1]">or 1-4 to select</span>
+                  </div>
+                  <div className="flex items-center gap-2 font-mono text-[10px] text-[#7871a8] dark:text-[#a59ed8]">
+                    <span>[P/←] Prev</span>
+                    <span>•</span>
+                    <span>[N/→] Next</span>
+                    <span>•</span>
+                    <span>[M] Mark</span>
+                    <span>•</span>
+                    <span>[Del] Clear</span>
+                  </div>
+                </div>
+
                 {/* Bottom Navigation */}
-                <div className="mt-8 pt-6 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="mt-6 pt-6 border-t border-[#e6e3f8] dark:border-[#2c2854] flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={handleClearAnswer}
                       disabled={!currentAnswer?.selected_option}
-                      className="text-xs text-gray-500 gap-1.5"
+                      className="text-xs text-[#554e80] dark:text-[#a8a1dc] hover:text-[#1d1a4a] dark:hover:text-white hover:bg-[#f0effe] dark:hover:bg-[#232049] gap-1.5"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
                       <span>Clear Response</span>
+                      <kbd className="hidden sm:inline px-1 py-0.2 rounded bg-black/5 dark:bg-white/10 text-[9px] font-mono">Del</kbd>
                     </Button>
 
                     <Button
@@ -1003,10 +1283,10 @@ function ExaminationEngineContent() {
                       }}
                       disabled={!currentAnswer?.selected_option}
                       className={cn(
-                        'text-xs font-mono gap-1.5',
+                        'text-xs font-mono gap-1.5 border-[#e6e3f8] dark:border-[#2c2854]',
                         confirmedQuestions[currentQuestion?.id]
-                          ? 'text-emerald-700 bg-emerald-50 border-emerald-300'
-                          : 'text-gray-600'
+                          ? 'text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-700'
+                          : 'text-[#554e80] dark:text-[#a8a1dc] hover:bg-[#f0effe] dark:hover:bg-[#232049]'
                       )}
                     >
                       <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
@@ -1020,10 +1300,11 @@ function ExaminationEngineContent() {
                       size="sm"
                       disabled={currentIndex === 0}
                       onClick={() => setCurrentIndex((prev) => prev - 1)}
-                      className="gap-1.5"
+                      className="gap-1.5 border-[#e6e3f8] dark:border-[#2c2854] text-[#1d1a4a] dark:text-[#e4e2fd] hover:bg-[#f0effe] dark:hover:bg-[#232049]"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       <span>Previous</span>
+                      <kbd className="hidden sm:inline px-1.5 py-0.5 rounded bg-[#f0effe] dark:bg-[#232049] text-[9px] font-mono border border-[#d5d0f5] dark:border-[#383366]">P</kbd>
                     </Button>
 
                     <Button
@@ -1031,9 +1312,10 @@ function ExaminationEngineContent() {
                       size="sm"
                       disabled={currentIndex === questions.length - 1}
                       onClick={() => setCurrentIndex((prev) => prev + 1)}
-                      className="gap-1.5"
+                      className="gap-1.5 bg-[#1d1a4a] hover:bg-[#2d2870] dark:bg-[#b8b3ff] dark:hover:bg-[#cfcbff] text-white dark:text-[#0d0c1d] font-semibold shadow-[0_2px_8px_rgba(29,26,74,0.16)]"
                     >
                       <span>Next</span>
+                      <kbd className="hidden sm:inline px-1.5 py-0.5 rounded bg-white/20 dark:bg-black/20 text-[9px] font-mono">N</kbd>
                       <ChevronRight className="w-4 h-4" />
                     </Button>
                   </div>
@@ -1053,12 +1335,12 @@ function ExaminationEngineContent() {
         {/* ========================================================= */}
         <aside className="hidden lg:flex lg:col-span-4 flex-col gap-4 sticky top-24">
           {/* Authoritative Timer & Stage Card */}
-          <Card className="p-5 border-slate-200/90 shadow-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-gray-400">
+          <Card className="p-5 border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-[0_4px_24px_rgba(184,179,255,0.08)]">
+            <div className="flex items-center justify-between pb-3 border-b border-[#e6e3f8] dark:border-[#2c2854]">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-[#7871a8] dark:text-[#a59ed8]">
                 Time Remaining
               </span>
-              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-800">
+              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-[#f0effe] dark:bg-[#232049] text-[#1d1a4a] dark:text-[#e4e2fd] border border-[#d5d0f5] dark:border-[#383366]">
                 Round {roundNum}
               </span>
             </div>
@@ -1066,25 +1348,25 @@ function ExaminationEngineContent() {
             <div
               className={cn(
                 'flex items-center gap-2.5 font-mono text-3xl font-bold tracking-tight my-3',
-                isLowTime ? 'text-rose-600 animate-pulse' : 'text-gray-900'
+                isLowTime ? 'text-rose-600 animate-pulse' : 'text-[#1d1a4a] dark:text-[#f4f3ff]'
               )}
             >
-              <Clock className={cn('w-7 h-7', isLowTime ? 'text-rose-600' : 'text-gray-500')} />
+              <Clock className={cn('w-7 h-7', isLowTime ? 'text-rose-600' : 'text-[#6355d8] dark:text-[#b8b3ff]')} />
               <span>{formatTimeRemaining(secondsRemaining)}</span>
             </div>
 
-            <div className="space-y-1.5 pt-2 border-t border-gray-100 text-xs text-gray-600">
+            <div className="space-y-1.5 pt-2 border-t border-[#e6e3f8] dark:border-[#2c2854] text-xs text-[#554e80] dark:text-[#a8a1dc]">
               <div className="flex justify-between">
-                <span className="text-gray-400">Candidate:</span>
-                <strong className="text-gray-900">{student?.full_name}</strong>
+                <span className="text-[#8881b8] dark:text-[#7d76b1]">Candidate:</span>
+                <strong className="text-[#1d1a4a] dark:text-[#f4f3ff]">{student?.full_name}</strong>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-400">ID / Roll:</span>
-                <span className="font-mono text-gray-800">{student?.roll_number}</span>
+                <span className="text-[#8881b8] dark:text-[#7d76b1]">ID / Roll:</span>
+                <span className="font-mono text-[#1d1a4a] dark:text-[#e4e2fd]">{student?.roll_number}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-400">Pass Criteria:</span>
-                <span className="font-semibold text-emerald-700">
+                <span className="text-[#8881b8] dark:text-[#7d76b1]">Pass Criteria:</span>
+                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
                   {currentRound?.qualifying_marks} / {currentRound?.total_marks} marks
                 </span>
               </div>
@@ -1092,45 +1374,45 @@ function ExaminationEngineContent() {
           </Card>
 
           {/* Questions Completed & Question Palette */}
-          <Card className="p-5 border-slate-200/90 shadow-xs space-y-4">
+          <Card className="p-5 border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-[0_4px_24px_rgba(184,179,255,0.08)] space-y-4">
             <div>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase font-bold tracking-wider text-gray-400">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-[#7871a8] dark:text-[#a59ed8]">
                   Questions Completed
                 </span>
-                <span className="text-xs font-mono font-bold text-gray-900">
+                <span className="text-xs font-mono font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">
                   {answeredCount} / {questions.length}
                 </span>
               </div>
 
               {/* Progress Bar */}
-              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
+              <div className="w-full bg-[#f0effe] dark:bg-[#201d40] h-2 rounded-full overflow-hidden">
                 <div
-                  className="bg-gray-900 h-2 rounded-full transition-all duration-300"
+                  className="bg-[#1d1a4a] dark:bg-[#b8b3ff] h-2 rounded-full transition-all duration-300"
                   style={{ width: `${(answeredCount / Math.max(1, questions.length)) * 100}%` }}
                 />
               </div>
 
               {/* Breakdown */}
-              <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs pt-2.5 border-t border-gray-100">
-                <div className="p-1 rounded bg-slate-50">
-                  <span className="text-[10px] uppercase text-gray-400 block font-semibold">Done</span>
-                  <span className="font-bold text-gray-900">{answeredCount}</span>
+              <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs pt-2.5 border-t border-[#e6e3f8] dark:border-[#2c2854]">
+                <div className="p-1 rounded bg-[#f5f4ff] dark:bg-[#1e1b3a] border border-[#e6e3f8] dark:border-[#2c2854]">
+                  <span className="text-[10px] uppercase text-[#7871a8] dark:text-[#a59ed8] block font-semibold">Done</span>
+                  <span className="font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">{answeredCount}</span>
                 </div>
-                <div className="p-1 rounded bg-rose-50">
+                <div className="p-1 rounded bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/30">
                   <span className="text-[10px] uppercase text-rose-500 block font-semibold">Left</span>
-                  <span className="font-bold text-rose-600">{unansweredCount}</span>
+                  <span className="font-bold text-rose-600 dark:text-rose-400">{unansweredCount}</span>
                 </div>
-                <div className="p-1 rounded bg-amber-50">
-                  <span className="text-[10px] uppercase text-amber-500 block font-semibold">Review</span>
-                  <span className="font-bold text-amber-600">{markedReviewCount}</span>
+                <div className="p-1 rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30">
+                  <span className="text-[10px] uppercase text-amber-600 block font-semibold">Review</span>
+                  <span className="font-bold text-amber-600 dark:text-amber-400">{markedReviewCount}</span>
                 </div>
               </div>
             </div>
 
             {/* Palette Grid */}
-            <div className="pt-3 border-t border-gray-100">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-gray-800 mb-3">
+            <div className="pt-3 border-t border-[#e6e3f8] dark:border-[#2c2854]">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#1d1a4a] dark:text-[#f4f3ff] mb-3">
                 Question Palette
               </h3>
 
@@ -1142,11 +1424,11 @@ function ExaminationEngineContent() {
                   const isCurrent = idx === currentIndex;
                   const isSynced = questionSyncMap[q.id] === 'synced';
 
-                  let btnStyle = 'border-gray-200 bg-white text-gray-700 hover:border-gray-400';
+                  let btnStyle = 'border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] text-[#1d1a4a] dark:text-[#f4f3ff] hover:border-[#b8b3ff]';
                   if (isMarked) {
-                    btnStyle = 'border-amber-400 bg-amber-50 text-amber-900 font-semibold';
+                    btnStyle = 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-semibold';
                   } else if (isAnswered) {
-                    btnStyle = 'border-gray-900 bg-gray-900 text-white font-bold';
+                    btnStyle = 'border-[#1d1a4a] dark:border-[#b8b3ff] bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] font-bold shadow-xs';
                   }
 
                   return (
@@ -1156,7 +1438,7 @@ function ExaminationEngineContent() {
                       className={cn(
                         'relative h-9 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
                         btnStyle,
-                        isCurrent && 'ring-2 ring-blue-500 ring-offset-1 font-bold'
+                        isCurrent && 'ring-2 ring-[#6355d8] dark:ring-[#b8b3ff] ring-offset-1 font-bold'
                       )}
                     >
                       <span>{idx + 1}</span>
@@ -1213,11 +1495,11 @@ function ExaminationEngineContent() {
                 const isCurrent = idx === currentIndex;
                 const isSynced = questionSyncMap[q.id] === 'synced';
 
-                let btnStyle = 'border-gray-200 bg-white text-gray-700';
+                let btnStyle = 'border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] text-[#1d1a4a] dark:text-[#f4f3ff]';
                 if (isMarked) {
-                  btnStyle = 'border-amber-400 bg-amber-50 text-amber-900 font-semibold';
+                  btnStyle = 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-semibold';
                 } else if (isAnswered) {
-                  btnStyle = 'border-gray-900 bg-gray-900 text-white font-bold';
+                  btnStyle = 'border-[#1d1a4a] dark:border-[#b8b3ff] bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] font-bold shadow-xs';
                 }
 
                 return (
@@ -1230,7 +1512,7 @@ function ExaminationEngineContent() {
                     className={cn(
                       'relative h-11 rounded-lg border text-xs font-mono flex items-center justify-center',
                       btnStyle,
-                      isCurrent && 'ring-2 ring-blue-500'
+                      isCurrent && 'ring-2 ring-[#6355d8] dark:ring-[#b8b3ff]'
                     )}
                   >
                     <span>{idx + 1}</span>
@@ -1261,6 +1543,133 @@ function ExaminationEngineContent() {
           </div>
         </div>
       )}
+
+      {/* Pre-Round 3 (Coding) Briefing & AI Usage Protocol Modal */}
+      <Dialog
+        isOpen={briefingModalOpen}
+        onClose={() => {
+          if (briefingCountdown === 0 && briefingConfirmed) {
+            handleDismissBriefing();
+          }
+        }}
+        title="Round 3 Briefing: Advanced Coding Sandbox Protocol"
+        description="Please review the rules, external AI assistance guidelines, and sandbox requirements before starting."
+      >
+        <div className="space-y-5">
+          {/* Circular Countdown Progress Badge */}
+          <div className="flex items-center justify-between p-4 rounded-xl bg-slate-900 text-white border border-slate-800">
+            <div className="space-y-1">
+              <span className="text-[10px] uppercase font-bold tracking-widest text-emerald-400 font-mono">
+                Mandatory Briefing Review
+              </span>
+              <h4 className="text-sm font-semibold">Carefully Read Round Guidelines</h4>
+              <p className="text-xs text-slate-300">
+                {briefingCountdown > 0
+                  ? `Sandbox unlocks automatically once reading timer concludes (${briefingCountdown}s left)`
+                  : 'Reading timer complete. Confirm acknowledgment below to enter sandbox.'}
+              </p>
+            </div>
+
+            {/* Circular SVG Timer */}
+            <div className="relative w-14 h-14 flex items-center justify-center shrink-0">
+              <svg className="w-14 h-14 transform -rotate-90">
+                <circle
+                  cx="28"
+                  cy="28"
+                  r="24"
+                  stroke="currentColor"
+                  strokeWidth="3.5"
+                  className="text-slate-700"
+                  fill="transparent"
+                />
+                <circle
+                  cx="28"
+                  cy="28"
+                  r="24"
+                  stroke="currentColor"
+                  strokeWidth="3.5"
+                  className="text-emerald-400 transition-all duration-1000 ease-linear"
+                  fill="transparent"
+                  strokeDasharray={2 * Math.PI * 24}
+                  strokeDashoffset={((15 - briefingCountdown) / 15) * (2 * Math.PI * 24)}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="absolute font-mono font-bold text-xs text-white">
+                {briefingCountdown > 0 ? `${briefingCountdown}s` : 'DONE'}
+              </span>
+            </div>
+          </div>
+
+          {/* Three Key Guidance Pillars */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div className="p-3.5 rounded-xl border border-sky-200 bg-sky-50 text-sky-950 space-y-1 sm:col-span-2">
+              <div className="flex items-center gap-2 font-bold text-sky-900">
+                <Sparkles className="w-4 h-4 text-sky-600" />
+                <span>AI & External Research Explicitly Permitted</span>
+              </div>
+              <p className="text-[11px] text-sky-800 leading-relaxed">
+                You are encouraged to use modern developer tools: ChatGPT, Claude, Gemini, documentation, and web references. You may freely switch tabs; no cheating warnings or proctor strikes will occur in this round.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 space-y-1">
+              <div className="flex items-center gap-2 font-bold text-slate-900">
+                <FileCode className="w-4 h-4 text-slate-700" />
+                <span>5 Languages Supported</span>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                Switch seamlessly between Python 3.12, Java 21, C (C11), C++ (C++17), and JavaScript (Node.js 20) with pre-configured templates.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-800 space-y-1">
+              <div className="flex items-center gap-2 font-bold text-slate-900">
+                <Database className="w-4 h-4 text-slate-700" />
+                <span>Offline-Resilient Sandbox</span>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                Every keystroke is written directly to device storage. Even in the event of campus Wi-Fi dropouts, your work remains 100% intact.
+              </p>
+            </div>
+          </div>
+
+          {/* Explicit Acknowledgment Checkbox */}
+          <label className="flex items-start gap-3 p-3.5 rounded-xl border border-gray-200 bg-gray-50/60 hover:bg-gray-50 cursor-pointer transition-colors">
+            <input
+              type="checkbox"
+              checked={briefingConfirmed}
+              onChange={(e) => setBriefingConfirmed(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-slate-900 focus:ring-slate-900"
+            />
+            <div className="text-xs text-gray-700 leading-snug">
+              <span className="font-semibold text-gray-900 block">
+                I have read and understood the assessment environment rules
+              </span>
+              <span>
+                I understand that external research/AI is allowed, my code is saved automatically, and I am ready to enter the workspace.
+              </span>
+            </div>
+          </label>
+
+          {/* Action Button */}
+          <div className="flex justify-end pt-2">
+            <Button
+              variant="primary"
+              size="md"
+              disabled={briefingCountdown > 0 || !briefingConfirmed}
+              onClick={handleDismissBriefing}
+              className="w-full text-xs uppercase tracking-wider font-semibold h-11"
+            >
+              {briefingCountdown > 0
+                ? `Reviewing Briefing (${briefingCountdown}s remaining)...`
+                : !briefingConfirmed
+                ? 'Check Acknowledgment Box Above to Begin'
+                : 'Enter Coding Sandbox'}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
 
       {/* Proctoring Warning Dialog */}
       <Dialog

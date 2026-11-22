@@ -25,6 +25,8 @@ import {
 import { toast } from 'sonner';
 import { formatTimeRemaining } from '@/lib/utils';
 import { ExaminationResult, RoundQualification, Student, ExaminationRound } from '@/types';
+import { CertificateModal } from '@/components/exam/certificate-modal';
+import { sounds } from '@/lib/audio/sound-effects';
 
 function StudentResultContent() {
   const params = useParams();
@@ -44,6 +46,7 @@ function StudentResultContent() {
   const [countdownSeconds, setCountdownSeconds] = React.useState<number>(120);
   const [readinessModalOpen, setReadinessModalOpen] = React.useState(false);
   const [readinessAgreed, setReadinessAgreed] = React.useState(false);
+  const [certModalOpen, setCertModalOpen] = React.useState(false);
 
   React.useEffect(() => {
     async function loadResult() {
@@ -119,6 +122,12 @@ function StudentResultContent() {
                 setCountdownSeconds(r.next_round_delay_seconds);
               }
             }
+
+            if (isQual) {
+              try {
+                sounds.playQualificationChime();
+              } catch {}
+            }
           }
         }
       } catch {
@@ -170,13 +179,13 @@ function StudentResultContent() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50/50">
+    <div className="min-h-screen flex flex-col bg-[#faf9fe] dark:bg-[#0d0c1d] text-[#1d1a4a] dark:text-[#f4f3ff] transition-colors">
       <Navbar />
 
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
         {/* Outcome Header Banner */}
         <div
-          className={`rounded-2xl border p-8 text-center transition-all shadow-xs ${
+          className={`rounded-2xl border p-5 sm:p-8 text-center transition-all shadow-xs ${
             isQualified ? 'border-emerald-200 bg-white' : 'border-gray-200 bg-white'
           }`}
         >
@@ -225,14 +234,14 @@ function StudentResultContent() {
 
           {/* Student Identifiers */}
           {student && (
-            <div className="mt-6 pt-6 border-t border-gray-100 flex items-center justify-center gap-6 text-xs text-gray-500">
+            <div className="mt-6 pt-6 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-6 text-xs text-gray-500">
               <div>
                 <span className="text-gray-400 block font-semibold uppercase tracking-wider text-[10px]">
                   Candidate Name
                 </span>
                 <span className="font-semibold text-gray-900">{student.full_name}</span>
               </div>
-              <div className="w-px h-6 bg-gray-200" />
+              <div className="hidden sm:block w-px h-6 bg-gray-200" />
               <div>
                 <span className="text-gray-400 block font-semibold uppercase tracking-wider text-[10px]">
                   Login Identifier
@@ -241,6 +250,21 @@ function StudentResultContent() {
                   {student.login_id || student.roll_number}
                 </span>
               </div>
+            </div>
+          )}
+
+          {/* Official Certificate & Scorecard Trigger */}
+          {isQualified && (
+            <div className="mt-6 pt-5 border-t border-gray-100 flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCertModalOpen(true)}
+                className="gap-2 text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer shadow-xs"
+              >
+                <Award className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>View Official Scorecard &amp; Credential</span>
+              </Button>
             </div>
           )}
         </div>
@@ -389,6 +413,15 @@ function StudentResultContent() {
             </div>
           </div>
         </Dialog>
+
+        {/* Official Certificate Modal */}
+        <CertificateModal
+          open={certModalOpen}
+          onClose={() => setCertModalOpen(false)}
+          student={student}
+          examName={exam?.name || 'Examination'}
+          result={result}
+        />
       </main>
     </div>
   );

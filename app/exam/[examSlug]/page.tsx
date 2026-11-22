@@ -265,43 +265,43 @@ function ExamRegistrationContent() {
   const totalMarks = rounds.reduce((acc: number, r: ExaminationRound) => acc + Number(r.total_marks), 0);
 
   return (
-    <div className="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col bg-gray-50/50">
+    <div className="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col bg-[#faf9fe] dark:bg-[#0d0c1d] text-[#1d1a4a] dark:text-[#f4f3ff] transition-colors">
       <Navbar />
 
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-4 flex flex-col min-h-0">
+      <main className="flex-1 w-full px-4 sm:px-8 lg:px-12 py-4 sm:py-6 flex flex-col min-h-0 overflow-y-auto lg:overflow-hidden">
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
           {/* Left Card: Examination Overview & Configured Rounds */}
-          <div className="lg:col-span-7 flex flex-col min-h-0 bg-white border border-gray-200 rounded-xl p-5 shadow-xs">
+          <div className="lg:col-span-7 flex flex-col min-h-0 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 sm:p-5 shadow-xs">
             {/* Top Examination Meta */}
-            <div className="shrink-0 pb-3 border-b border-gray-100">
+            <div className="shrink-0 pb-3 border-b border-zinc-100 dark:border-zinc-800">
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <Badge variant={exam.status === 'live' ? 'success' : 'neutral'} size="sm">
                   Status: {exam.status}
                 </Badge>
-                <span className="text-[11px] font-mono text-gray-400">/{exam.slug}</span>
+                <span className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500">/{exam.slug}</span>
               </div>
 
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
+              <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-white tracking-tight">
                 {exam.name}
               </h1>
               {exam.description && (
-                <p className="mt-1 text-xs text-gray-500 leading-relaxed line-clamp-2">
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed line-clamp-2">
                   {exam.description}
                 </p>
               )}
 
               {/* Badges row */}
-              <div className="mt-3 flex flex-wrap items-center gap-2.5 pt-2.5 border-t border-gray-100 text-xs text-gray-600">
-                <div className="flex items-center gap-1.5 bg-gray-50 px-2.5 py-1 rounded border border-gray-100">
-                  <Layers className="w-3.5 h-3.5 text-gray-500" />
+              <div className="mt-3 flex flex-wrap items-center gap-2 pt-2.5 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-600 dark:text-zinc-400">
+                <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/60 px-2.5 py-1 rounded border border-zinc-200 dark:border-zinc-700/60">
+                  <Layers className="w-3.5 h-3.5 text-zinc-500" />
                   <span className="font-semibold">{rounds.length} Dynamic Rounds</span>
                 </div>
-                <div className="flex items-center gap-1.5 bg-gray-50 px-2.5 py-1 rounded border border-gray-100">
-                  <Clock className="w-3.5 h-3.5 text-gray-500" />
+                <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/60 px-2.5 py-1 rounded border border-zinc-200 dark:border-zinc-700/60">
+                  <Clock className="w-3.5 h-3.5 text-zinc-500" />
                   <span className="font-semibold">{formatDuration(totalDuration)}</span>
                 </div>
-                <div className="flex items-center gap-1.5 bg-gray-50 px-2.5 py-1 rounded border border-gray-100">
-                  <Award className="w-3.5 h-3.5 text-gray-500" />
+                <div className="flex items-center gap-1.5 bg-zinc-50 dark:bg-zinc-800/60 px-2.5 py-1 rounded border border-zinc-200 dark:border-zinc-700/60">
+                  <Award className="w-3.5 h-3.5 text-zinc-500" />
                   <span className="font-semibold">{totalMarks} Total Marks</span>
                 </div>
               </div>
@@ -309,8 +309,8 @@ function ExamRegistrationContent() {
 
             {/* Configured Rounds Header */}
             <div className="mt-3 flex items-center justify-between shrink-0 mb-2">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-gray-700">Configured Rounds</h2>
-              <span className="text-[11px] text-gray-400">Sequential Qualification</span>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">Configured Rounds</h2>
+              <span className="text-[11px] font-mono text-zinc-400 dark:text-zinc-500">Sequential Qualification</span>
             </div>
 
             {/* Rounds List */}
@@ -318,41 +318,41 @@ function ExamRegistrationContent() {
               {rounds.map((round: ExaminationRound) => (
                 <div
                   key={round.id}
-                  className="p-3 rounded-lg border border-gray-200 bg-gray-50/50 hover:bg-white hover:border-gray-300 transition-all"
+                  className="p-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30 hover:bg-white dark:hover:bg-zinc-800/80 hover:border-zinc-300 dark:hover:border-zinc-700 transition-all"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="w-5 h-5 rounded-full bg-gray-900 text-white flex items-center justify-center text-[10px] font-bold font-mono shrink-0">
+                      <span className="w-5 h-5 rounded-full bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 flex items-center justify-center text-[10px] font-bold font-mono shrink-0">
                         {round.round_number}
                       </span>
-                      <h3 className="text-xs font-semibold text-gray-900 truncate">{round.name}</h3>
+                      <h3 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">{round.name}</h3>
                     </div>
                     <Badge variant={round.status === 'active' ? 'success' : 'neutral'} size="sm" className="shrink-0 text-[10px]">
                       {round.status}
                     </Badge>
                   </div>
 
-                  <div className="mt-2 grid grid-cols-4 gap-2 py-1.5 px-2.5 bg-white rounded border border-gray-100 text-[11px]">
+                  <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 py-1.5 px-2.5 bg-white dark:bg-zinc-900 rounded border border-zinc-100 dark:border-zinc-800 text-[11px]">
                     <div>
-                      <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-medium">Duration</span>
-                      <span className="font-semibold text-gray-800">{round.duration_minutes}m</span>
+                      <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 block font-medium">Duration</span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{round.duration_minutes}m</span>
                     </div>
                     <div>
-                      <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-medium">Questions</span>
-                      <span className="font-semibold text-gray-800">{round.total_questions} MCQs</span>
+                      <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 block font-medium">Questions</span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{round.total_questions} MCQs</span>
                     </div>
                     <div>
-                      <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-medium">Marks / Q</span>
-                      <span className="font-semibold text-gray-800">+{round.marks_per_question} / -{round.negative_marks}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 block font-medium">Marks / Q</span>
+                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">+{round.marks_per_question} / -{round.negative_marks}</span>
                     </div>
                     <div>
-                      <span className="text-[10px] uppercase tracking-wider text-gray-400 block font-medium">Qualifying</span>
-                      <span className="font-semibold text-emerald-700">{round.qualifying_marks} / {round.total_marks}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 block font-medium">Qualifying</span>
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">{round.qualifying_marks} / {round.total_marks}</span>
                     </div>
                   </div>
 
                   {round.instructions && (
-                    <p className="mt-1.5 text-[11px] text-gray-500 line-clamp-1 leading-normal">
+                    <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-1 leading-normal">
                       {round.instructions}
                     </p>
                   )}
@@ -363,11 +363,11 @@ function ExamRegistrationContent() {
 
           {/* Right Card: Candidate Admission & Authentication */}
           <div className="lg:col-span-5 flex flex-col justify-start">
-            <Card className="border-gray-200 bg-white shadow-xs h-full flex flex-col justify-between">
+            <Card className="border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs h-full flex flex-col justify-between">
               <div>
                 <CardHeader className="p-5 pb-3">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                    <UserCheck className="w-4 h-4 text-gray-900" />
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                    <UserCheck className="w-4 h-4 text-zinc-900 dark:text-zinc-100" />
                     <span>Student Admission</span>
                   </div>
                   <CardTitle className="text-lg sm:text-xl font-bold mt-1">
@@ -456,40 +456,40 @@ function ExamRegistrationContent() {
                   verifiedStudent ? (
                     /* Step 2: Verification Review Screen */
                     <div className="space-y-3">
-                      <div className="p-3.5 rounded-lg border border-gray-200 bg-gray-50 text-xs space-y-2">
-                        <div className="flex items-center gap-2 text-emerald-700 font-bold">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <div className="p-3.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/40 text-xs space-y-2">
+                        <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                           <span>Candidate Record Found</span>
                         </div>
 
-                        <div className="space-y-1.5 text-xs text-gray-700">
+                        <div className="space-y-1.5 text-xs text-zinc-700 dark:text-zinc-300">
                           <div>
-                            <span className="text-[10px] uppercase text-gray-400 font-semibold block">Full Name</span>
-                            <span className="font-bold text-gray-900 text-sm">{verifiedStudent.full_name}</span>
+                            <span className="text-[10px] uppercase text-zinc-400 dark:text-zinc-500 font-semibold block">Full Name</span>
+                            <span className="font-bold text-zinc-900 dark:text-white text-sm">{verifiedStudent.full_name}</span>
                           </div>
 
                           <div>
-                            <span className="text-[10px] uppercase text-gray-400 font-semibold block">
+                            <span className="text-[10px] uppercase text-zinc-400 dark:text-zinc-500 font-semibold block">
                               {loginIdentifierLabel}
                             </span>
-                            <span className="font-mono font-semibold text-gray-900">
+                            <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
                               {verifiedStudent.login_id || verifiedStudent.roll_number}
                             </span>
                           </div>
 
                           <div>
-                            <span className="text-[10px] uppercase text-gray-400 font-semibold block">Official Email</span>
-                            <span className="text-gray-700">{verifiedStudent.email}</span>
+                            <span className="text-[10px] uppercase text-zinc-400 dark:text-zinc-500 font-semibold block">Official Email</span>
+                            <span className="text-zinc-700 dark:text-zinc-300 font-mono text-[11px]">{verifiedStudent.email}</span>
                           </div>
 
                           {verifiedStudent.attributes && Object.keys(verifiedStudent.attributes).length > 0 && (
-                            <div className="pt-2 border-t border-gray-200">
-                              <span className="text-[10px] uppercase text-gray-400 font-semibold block mb-1">
+                            <div className="pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                              <span className="text-[10px] uppercase text-zinc-400 dark:text-zinc-500 font-semibold block mb-1">
                                 Roster Metadata
                               </span>
                               <div className="flex flex-wrap gap-1">
                                 {Object.entries(verifiedStudent.attributes).map(([k, v]) => (
-                                  <span key={k} className="px-2 py-0.5 rounded bg-white border border-gray-200 text-[10px] text-gray-700 font-medium">
+                                  <span key={k} className="px-2 py-0.5 rounded bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-[10px] text-zinc-700 dark:text-zinc-300 font-medium">
                                     {k}: {String(v)}
                                   </span>
                                 ))}
@@ -513,7 +513,7 @@ function ExamRegistrationContent() {
                           setVerifiedStudent(null);
                           setVerifiedRegId(null);
                         }}
-                        className="w-full text-center text-xs text-gray-500 hover:text-gray-900 py-1 transition-colors cursor-pointer"
+                        className="w-full text-center text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-white py-1 transition-colors cursor-pointer"
                       >
                         Not you? Enter a different ID
                       </button>

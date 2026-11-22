@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db/store';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { getPgPool } from '@/lib/db/pg';
 
 export async function POST(
   req: Request,
@@ -41,24 +41,17 @@ export async function POST(
     const regId = verification.registration?.id;
 
     if (regId) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data: sbAtt } = await supabase
-            .from('examination_attempts')
-            .select('id, status')
-            .eq('registration_id', regId)
-            .in('status', ['submitted', 'timed_out', 'terminated'])
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (sbAtt) {
-            hasCompletedAttempt = true;
-            completedAttemptId = sbAtt.id;
-          }
-        } catch {}
-      }
+      try {
+        const pool = getPgPool();
+        const { rows } = await pool.query(
+          "SELECT id, status FROM examination_attempts WHERE registration_id = $1 AND status IN ('submitted', 'timed_out', 'terminated') ORDER BY created_at DESC LIMIT 1",
+          [regId]
+        );
+        if (rows.length > 0) {
+          hasCompletedAttempt = true;
+          completedAttemptId = rows[0].id;
+        }
+      } catch {}
     }
 
     return NextResponse.json({

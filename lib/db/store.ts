@@ -17,11 +17,11 @@ import {
   Difficulty,
   QuestionOption,
 } from '@/types';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { getPgPool, queryPg } from '@/lib/db/pg';
 import { resilientStorage, ResilientSnapshot } from '@/lib/db/resilient-storage';
 import { processPdfQuestions, APTITUDE_REASONING_BANK, MEDIUM_APTITUDE_REASONING_BANK } from '@/lib/pdf/extractor';
 
-// In-memory high-throughput state engine with resilient disk backup and Supabase sync
+// In-memory high-throughput state engine with resilient disk backup and authoritative PostgreSQL 17 ACID WAL
 class StateStore {
   examinations: Map<string, Examination> = new Map();
   rounds: Map<string, ExaminationRound> = new Map();
@@ -288,39 +288,40 @@ const inFlightSubmissions = new Set<string>();
 export const db = {
   // EXAMINATIONS
   async getExaminations(): Promise<Examination[]> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('examinations')
-          .select('*, rounds:examination_rounds(*)')
-          .order('created_at', { ascending: false });
-        if (!error && data && data.length > 0) {
-          const examList: Examination[] = [];
-          for (const item of data) {
-            const rounds = (item.rounds || []).sort((a: any, b: any) => a.round_number - b.round_number);
-            const { count: regCount } = await supabase
-              .from('registrations')
-              .select('*', { count: 'exact', head: true })
-              .eq('examination_id', item.id);
-            const exObj: Examination = {
-              ...item,
-              rounds,
-              _count: {
-                registrations: regCount || 0,
-                rounds: rounds.length,
-              },
-            };
-            examList.push(exObj);
-            store.examinations.set(item.id, exObj);
-            rounds.forEach((r: any) => store.rounds.set(r.id, r));
-          }
-          return examList;
-        }
-      } catch {
-        // Fall back to store
+    try {
+      const { rows: examRows } = await queryPg('SELECT * FROM examinations ORDER BY created_at DESC');
+      if (examRows.length > 0) {
+        const examIds = examRows.map((e) => e.id);
+        const { rows: roundRows } = await queryPg(
+          'SELECT * FROM examination_rounds WHERE examination_id = ANY($1) ORDER BY round_number ASC',
+          [examIds]
+        );
+        const { rows: regRows } = await queryPg(
+          'SELECT examination_id, COUNT(*) as count FROM registrations WHERE examination_id = ANY($1) GROUP BY examination_id',
+          [examIds]
+        );
+        const regCountMap = new Map(regRows.map((r) => [r.examination_id, parseInt(r.count, 10)]));
+
+        const examList: Examination[] = examRows.map((e) => {
+          const rounds = roundRows.filter((r) => r.examination_id === e.id);
+          const exObj: Examination = {
+            ...e,
+            rounds,
+            _count: {
+              registrations: regCountMap.get(e.id) || 0,
+              rounds: rounds.length,
+            },
+          };
+          store.examinations.set(e.id, exObj);
+          rounds.forEach((r) => store.rounds.set(r.id, r));
+          return exObj;
+        });
+        return examList;
       }
+    } catch (err) {
+      console.warn('[PostgreSQL getExaminations error]', err);
     }
+
     let exams = Array.from(store.examinations.values());
     if (exams.length === 0) {
       const snap = resilientStorage.loadSnapshot();
@@ -340,7 +341,35 @@ export const db = {
   },
 
   async getExaminationById(id: string): Promise<Examination | null> {
-    // 1. Memory-first resolution for sub-millisecond response
+    try {
+      const pool = getPgPool();
+      const { rows: examRows } = await pool.query('SELECT * FROM examinations WHERE id = $1 LIMIT 1', [id]);
+      if (examRows.length > 0) {
+        const e = examRows[0];
+        const { rows: rounds } = await pool.query(
+          'SELECT * FROM examination_rounds WHERE examination_id = $1 ORDER BY round_number ASC',
+          [id]
+        );
+        const { rows: regCountRows } = await pool.query(
+          'SELECT COUNT(*) as count FROM registrations WHERE examination_id = $1',
+          [id]
+        );
+        const exObj: Examination = {
+          ...e,
+          rounds,
+          _count: {
+            registrations: parseInt(regCountRows[0]?.count || '0', 10),
+            rounds: rounds.length,
+          },
+        };
+        store.examinations.set(id, exObj);
+        rounds.forEach((r) => store.rounds.set(r.id, r));
+        return exObj;
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL getExaminationById error]', err);
+    }
+
     let exam = store.examinations.get(id);
     if (!exam) {
       const snap = resilientStorage.loadSnapshot();
@@ -350,62 +379,16 @@ export const db = {
       }
     }
 
-    // 2. Fall back to Supabase if not found in memory
-    const supabase = createAdminClient();
-    if (!exam && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('examinations')
-          .select('*, rounds:examination_rounds(*)')
-          .eq('id', id)
-          .maybeSingle();
-        if (!error && data) {
-          exam = data as Examination;
-          store.examinations.set(id, exam);
-          if (data.rounds) {
-            data.rounds.forEach((r: any) => store.rounds.set(r.id, r));
-          }
-        }
-      } catch {
-        // Fall back to store
-      }
-    }
-
     if (exam) {
       let rounds = Array.from(store.rounds.values())
         .filter((r) => r.examination_id === exam.id)
         .sort((a, b) => a.round_number - b.round_number);
 
-      if (rounds.length === 0 && supabase) {
-        try {
-          const { data } = await supabase
-            .from('examination_rounds')
-            .select('*')
-            .eq('examination_id', exam.id)
-            .order('round_number', { ascending: true });
-          if (data && data.length > 0) {
-            rounds = data as ExaminationRound[];
-            rounds.forEach((r) => store.rounds.set(r.id, r));
-          }
-        } catch {}
-      }
-
-      let regCount = Array.from(store.registrations.values()).filter((r) => r.examination_id === exam.id).length;
-      if (regCount === 0 && supabase) {
-        try {
-          const { count } = await supabase
-            .from('registrations')
-            .select('*', { count: 'exact', head: true })
-            .eq('examination_id', exam.id);
-          regCount = count || 0;
-        } catch {}
-      }
-
       return {
         ...exam,
         rounds,
         _count: {
-          registrations: regCount,
+          registrations: Array.from(store.registrations.values()).filter((reg) => reg.examination_id === exam.id).length,
           rounds: rounds.length,
         },
       };
@@ -415,36 +398,23 @@ export const db = {
   },
 
   async getExaminationBySlug(slug: string): Promise<Examination | null> {
-    // 1. Memory-first resolution
+    try {
+      const pool = getPgPool();
+      const { rows: examRows } = await pool.query(
+        'SELECT * FROM examinations WHERE slug = $1 OR id = $1 LIMIT 1',
+        [slug]
+      );
+      if (examRows.length > 0) {
+        return this.getExaminationById(examRows[0].id);
+      }
+    } catch {}
+
     let exam = Array.from(store.examinations.values()).find((e) => e.slug === slug || e.id === slug);
     if (!exam) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.examinations) {
         store.hydrate(snap);
         exam = Array.from(store.examinations.values()).find((e) => e.slug === slug || e.id === slug);
-      }
-    }
-
-    // 2. Fall back to Supabase
-    if (!exam) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data, error } = await supabase
-            .from('examinations')
-            .select('*, rounds:examination_rounds(*)')
-            .or(`slug.eq.${slug},id.eq.${slug}`)
-            .maybeSingle();
-          if (!error && data) {
-            exam = data as Examination;
-            store.examinations.set(exam.id, exam);
-            if (data.rounds) {
-              data.rounds.forEach((r: any) => store.rounds.set(r.id, r));
-            }
-          }
-        } catch {
-          // Fall back to store
-        }
       }
     }
 
@@ -455,12 +425,12 @@ export const db = {
   },
 
   async createExamination(examData: Partial<Examination>, roundsData?: Partial<ExaminationRound>[]): Promise<Examination> {
-    const supabase = createAdminClient();
     const id = examData.id || `exam-${Date.now()}`;
+    const slug = examData.slug || `exam-${Date.now()}`;
     const newExam: Examination = {
       id,
       name: examData.name || 'Untitled Examination',
-      slug: examData.slug || `exam-${Date.now()}`,
+      slug,
       description: examData.description || '',
       status: examData.status || 'draft',
       exam_date: examData.exam_date || new Date().toISOString(),
@@ -479,21 +449,78 @@ export const db = {
       updated_at: new Date().toISOString(),
     };
 
-    if (supabase) {
-      try {
-        const { error } = await supabase.from('examinations').upsert(newExam);
-        if (!error && roundsData && roundsData.length > 0) {
-          const insertRounds = roundsData.map((r, i) => ({
-            ...r,
-            examination_id: id,
-            round_number: r.round_number || i + 1,
-            name: r.name || `Round ${i + 1}`,
-          }));
-          await supabase.from('examination_rounds').upsert(insertRounds);
+    try {
+      const pool = getPgPool();
+      await pool.query(`
+        INSERT INTO examinations (id, name, slug, description, status, exam_date, show_marks_to_students, max_cheating_warnings, auth_mode, login_identifier_field, login_identifier_label, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          name = EXCLUDED.name,
+          slug = EXCLUDED.slug,
+          description = EXCLUDED.description,
+          status = EXCLUDED.status,
+          exam_date = EXCLUDED.exam_date,
+          show_marks_to_students = EXCLUDED.show_marks_to_students,
+          max_cheating_warnings = EXCLUDED.max_cheating_warnings,
+          auth_mode = EXCLUDED.auth_mode,
+          login_identifier_field = EXCLUDED.login_identifier_field,
+          login_identifier_label = EXCLUDED.login_identifier_label,
+          updated_at = NOW()
+      `, [
+        newExam.id,
+        newExam.name,
+        newExam.slug,
+        newExam.description,
+        newExam.status,
+        newExam.exam_date,
+        newExam.show_marks_to_students,
+        newExam.max_cheating_warnings,
+        newExam.auth_mode,
+        newExam.login_identifier_field,
+        newExam.login_identifier_label,
+      ]);
+
+      if (roundsData && roundsData.length > 0) {
+        for (let i = 0; i < roundsData.length; i++) {
+          const r = roundsData[i];
+          const rId = r.id || `round-${id}-${i + 1}`;
+          const totalQ = Number(r.total_questions) || 30;
+          const marksPerQ = Number(r.marks_per_question) || 1;
+          const totalM = r.total_marks ? Number(r.total_marks) : totalQ * marksPerQ;
+          await pool.query(`
+            INSERT INTO examination_rounds (id, examination_id, round_number, name, duration_minutes, total_questions, marks_per_question, negative_marks, qualifying_marks, total_marks, status, round_type, auto_qualify, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+            ON CONFLICT (id) DO UPDATE SET
+              name = EXCLUDED.name,
+              duration_minutes = EXCLUDED.duration_minutes,
+              total_questions = EXCLUDED.total_questions,
+              marks_per_question = EXCLUDED.marks_per_question,
+              negative_marks = EXCLUDED.negative_marks,
+              qualifying_marks = EXCLUDED.qualifying_marks,
+              total_marks = EXCLUDED.total_marks,
+              status = EXCLUDED.status,
+              round_type = EXCLUDED.round_type,
+              auto_qualify = EXCLUDED.auto_qualify,
+              updated_at = NOW()
+          `, [
+            rId,
+            id,
+            r.round_number || i + 1,
+            r.name || `Round ${i + 1}`,
+            Number(r.duration_minutes) || 60,
+            totalQ,
+            marksPerQ,
+            Number(r.negative_marks) || 0,
+            Number(r.qualifying_marks) || 10,
+            totalM,
+            r.status || 'draft',
+            r.round_type || 'mcq',
+            r.auto_qualify ?? true,
+          ]);
         }
-      } catch {
-        // continue to store
       }
+    } catch (err) {
+      console.warn('[PostgreSQL createExamination error]', err);
     }
 
     store.examinations.set(id, newExam);
@@ -540,50 +567,72 @@ export const db = {
   },
 
   async updateExaminationStatus(examId: string, status: ExamStatus): Promise<Examination | null> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('examinations').update({ status, updated_at: new Date().toISOString() }).eq('id', examId);
-      } catch {
-        // Fall back to store
-      }
+    try {
+      const pool = getPgPool();
+      await pool.query(
+        'UPDATE examinations SET status = $1, updated_at = NOW() WHERE id = $2',
+        [status, examId]
+      );
+    } catch (err) {
+      console.warn('[PostgreSQL updateExaminationStatus error]', err);
     }
+
     const exam = store.examinations.get(examId);
     if (exam) {
       exam.status = status;
       exam.updated_at = new Date().toISOString();
       store.examinations.set(examId, exam);
-      resilientStorage.scheduleSave(() => store.toSnapshot());
     }
+    resilientStorage.flushSync(() => store.toSnapshot());
     return this.getExaminationById(examId);
+  },
+
+  async deleteExamination(examId: string): Promise<boolean> {
+    try {
+      const pool = getPgPool();
+      await pool.query('DELETE FROM attempt_answers WHERE attempt_id IN (SELECT id FROM examination_attempts WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1))', [examId]);
+      await pool.query('DELETE FROM examination_results WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)', [examId]);
+      await pool.query('DELETE FROM examination_attempts WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)', [examId]);
+      await pool.query('DELETE FROM registrations WHERE examination_id = $1', [examId]);
+      await pool.query('DELETE FROM examination_rounds WHERE examination_id = $1', [examId]);
+      await pool.query('DELETE FROM examinations WHERE id = $1', [examId]);
+    } catch (err) {
+      console.warn('[PostgreSQL deleteExamination error]', err);
+    }
+
+    store.examinations.delete(examId);
+    for (const [rId, r] of store.rounds.entries()) {
+      if (r.examination_id === examId) store.rounds.delete(rId);
+    }
+    for (const [regId, reg] of store.registrations.entries()) {
+      if (reg.examination_id === examId) store.registrations.delete(regId);
+    }
+    resilientStorage.flushSync(() => store.toSnapshot());
+    return true;
   },
 
   // ROUNDS
   async getRoundsByExamId(examId: string): Promise<ExaminationRound[]> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('examination_rounds')
-          .select('*')
-          .eq('examination_id', examId)
-          .order('round_number', { ascending: true });
-        if (!error && data && data.length > 0) {
-          const rounds = data as ExaminationRound[];
-          rounds.forEach((r) => store.rounds.set(r.id, r));
-          return rounds.map((r) => {
-            const memoryCount = Array.from(store.questions.values()).filter(
-              (q) => q.round_id === r.id && (q.status === 'approved' || !q.status)
-            ).length;
-            return {
-              ...r,
-              question_pool_count: Math.max(r.question_pool_count || 0, memoryCount),
-            };
-          });
-        }
-      } catch (err) {
-        console.warn('[Supabase getRoundsByExamId error]', err);
+    try {
+      const pool = getPgPool();
+      const { rows } = await pool.query(
+        'SELECT * FROM examination_rounds WHERE examination_id = $1 ORDER BY round_number ASC',
+        [examId]
+      );
+      if (rows.length > 0) {
+        rows.forEach((r) => store.rounds.set(r.id, r));
+        return rows.map((r) => {
+          const memoryCount = Array.from(store.questions.values()).filter(
+            (q) => q.round_id === r.id && (q.status === 'approved' || !q.status)
+          ).length;
+          return {
+            ...r,
+            question_pool_count: Math.max(r.question_pool_count || 0, memoryCount),
+          };
+        });
       }
+    } catch (err) {
+      console.warn('[PostgreSQL getRoundsByExamId error]', err);
     }
 
     let rounds = Array.from(store.rounds.values())
@@ -619,20 +668,18 @@ export const db = {
   },
 
   async getRoundById(roundId: string): Promise<ExaminationRound | null> {
-    const supabase = createAdminClient();
-    if (supabase) {
+    let round = store.rounds.get(roundId);
+    if (!round) {
       try {
-        const { data } = await supabase.from('examination_rounds').select('*').eq('id', roundId).maybeSingle();
-        if (data) {
-          const round = data as ExaminationRound;
+        const pool = getPgPool();
+        const { rows } = await pool.query('SELECT * FROM examination_rounds WHERE id = $1 LIMIT 1', [roundId]);
+        if (rows.length > 0) {
+          round = rows[0] as ExaminationRound;
           store.rounds.set(roundId, round);
           return round;
         }
       } catch {}
-    }
 
-    let round = store.rounds.get(roundId);
-    if (!round) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.rounds) {
         store.hydrate(snap);
@@ -719,68 +766,76 @@ export const db = {
       updated_at: new Date().toISOString(),
     };
 
+    try {
+      const pool = getPgPool();
+      await pool.query(`
+        INSERT INTO examination_rounds (id, examination_id, round_number, name, duration_minutes, total_questions, marks_per_question, negative_marks, qualifying_marks, total_marks, status, round_type, auto_qualify, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          name = EXCLUDED.name,
+          duration_minutes = EXCLUDED.duration_minutes,
+          total_questions = EXCLUDED.total_questions,
+          marks_per_question = EXCLUDED.marks_per_question,
+          negative_marks = EXCLUDED.negative_marks,
+          qualifying_marks = EXCLUDED.qualifying_marks,
+          total_marks = EXCLUDED.total_marks,
+          status = EXCLUDED.status,
+          round_type = EXCLUDED.round_type,
+          auto_qualify = EXCLUDED.auto_qualify,
+          updated_at = NOW()
+      `, [
+        roundData.id,
+        roundData.examination_id,
+        roundData.round_number,
+        roundData.name,
+        roundData.duration_minutes,
+        roundData.total_questions,
+        roundData.marks_per_question,
+        roundData.negative_marks,
+        roundData.qualifying_marks,
+        roundData.total_marks,
+        roundData.status,
+        roundData.round_type,
+        roundData.auto_qualify,
+      ]);
+    } catch (err) {
+      console.warn('[PostgreSQL createOrUpdateRound error]', err);
+    }
+
     store.rounds.set(id, roundData);
     resilientStorage.flushSync(() => store.toSnapshot());
-
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('examination_rounds').upsert(roundData);
-      } catch (err) {
-        console.warn('[Supabase createOrUpdateRound error]', err);
-      }
-    }
 
     return roundData;
   },
 
   async deleteRound(examId: string, roundId: string): Promise<boolean> {
-    store.rounds.delete(roundId);
-
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('examination_rounds').delete().eq('id', roundId);
-        await supabase.from('question_banks').delete().eq('id', `bank-${roundId}`);
-      } catch (err) {
-        console.warn('[Supabase deleteRound error]', err);
-      }
+    try {
+      const pool = getPgPool();
+      await pool.query('DELETE FROM attempt_answers WHERE attempt_id IN (SELECT id FROM examination_attempts WHERE round_id = $1)', [roundId]);
+      await pool.query('DELETE FROM examination_results WHERE round_id = $1', [roundId]);
+      await pool.query('DELETE FROM examination_attempts WHERE round_id = $1', [roundId]);
+      await pool.query('DELETE FROM questions WHERE round_id = $1', [roundId]);
+      await pool.query('DELETE FROM examination_rounds WHERE id = $1', [roundId]);
+    } catch (err) {
+      console.warn('[PostgreSQL deleteRound error]', err);
     }
 
-    // Re-index remaining rounds sequentially (1, 2, 3...) both in memory and Supabase
+    store.rounds.delete(roundId);
+
+    // Re-index remaining rounds sequentially (1, 2, 3...) both in memory and PostgreSQL
     let remaining = Array.from(store.rounds.values()).filter(
       (r) => r.examination_id === examId && r.id !== roundId
     );
-
-    if (supabase) {
-      try {
-        const { data } = await supabase
-          .from('examination_rounds')
-          .select('*')
-          .eq('examination_id', examId)
-          .order('round_number', { ascending: true });
-        if (data && data.length > 0) {
-          remaining = data as ExaminationRound[];
-        }
-      } catch {}
-    }
-
     remaining.sort((a, b) => a.round_number - b.round_number);
-
-    for (let idx = 0; idx < remaining.length; idx++) {
-      const r = remaining[idx];
-      const newNum = idx + 1;
-      r.round_number = newNum;
-      store.rounds.set(r.id, r);
-      if (supabase) {
-        try {
-          await supabase
-            .from('examination_rounds')
-            .update({ round_number: newNum, updated_at: new Date().toISOString() })
-            .eq('id', r.id);
-        } catch {}
+    try {
+      const pool = getPgPool();
+      for (let i = 0; i < remaining.length; i++) {
+        const nextNum = i + 1;
+        remaining[i].round_number = nextNum;
+        store.rounds.set(remaining[i].id, remaining[i]);
+        await pool.query('UPDATE examination_rounds SET round_number = $1 WHERE id = $2', [nextNum, remaining[i].id]);
       }
-    }
+    } catch {}
 
     resilientStorage.flushSync(() => store.toSnapshot());
     return true;
@@ -840,72 +895,68 @@ export const db = {
     };
     store.registrations.set(regId, registration);
     store.regByExamAndRoll.set(examRollKey, regId);
-    resilientStorage.scheduleSave(() => store.toSnapshot());
 
-    // Synchronize to Supabase immediately for persistent multi-container reliability
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data: exExists } = await supabase.from('examinations').select('id').eq('id', params.examId).maybeSingle();
-        if (!exExists) {
-          const exMem = store.examinations.get(params.examId);
-          await supabase.from('examinations').upsert({
-            id: params.examId,
-            name: exMem?.name || 'Campus Examination',
-            slug: exMem?.slug || params.examId,
-            status: exMem?.status || 'published',
-            auth_mode: 'roster',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-        }
+    try {
+      const pool = getPgPool();
+      await pool.query(`
+        INSERT INTO students (id, roll_number, login_id, full_name, email, examination_id, created_at)
+        VALUES ($1, $2, $2, $3, $4, $5, NOW())
+        ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email
+      `, [student.id, student.roll_number, student.full_name, student.email, params.examId]);
 
-        await supabase.from('students').upsert({
-          id: student.id,
-          full_name: student.full_name,
-          email: student.email,
-          roll_number: student.roll_number,
-          login_id: student.login_id,
-          examination_id: params.examId,
-          created_at: student.created_at,
-        });
-
-        await supabase.from('registrations').upsert({
-          id: regId,
-          examination_id: params.examId,
-          student_id: student.id,
-          login_id: cleanRoll,
-          registered_at: registration.registered_at,
-          status: 'registered',
-        });
-      } catch (err) {
-        console.warn('[Supabase registerStudent sync error]', err);
-      }
+      await pool.query(`
+        INSERT INTO registrations (id, examination_id, student_id, login_id, registered_at, status)
+        VALUES ($1, $2, $3, $4, NOW(), 'registered')
+        ON CONFLICT (id) DO NOTHING
+      `, [regId, params.examId, student.id, cleanRoll]);
+    } catch (err) {
+      console.warn('[PostgreSQL registerStudent error]', err);
     }
 
+    resilientStorage.scheduleSave(() => store.toSnapshot());
     return { student, registration, isNew: true };
   },
 
   async getRegistration(regId: string): Promise<Registration | null> {
     let reg = store.registrations.get(regId);
     if (!reg) {
+      try {
+        const pool = getPgPool();
+        const { rows } = await pool.query(`
+          SELECT r.*, s.roll_number, s.full_name, s.email, s.attributes
+          FROM registrations r
+          JOIN students s ON s.id = r.student_id
+          WHERE r.id = $1 LIMIT 1
+        `, [regId]);
+        if (rows.length > 0) {
+          const row = rows[0];
+          const student: Student = {
+            id: row.student_id,
+            roll_number: row.roll_number,
+            login_id: row.login_id || row.roll_number,
+            full_name: row.full_name,
+            email: row.email,
+            attributes: row.attributes || {},
+            created_at: row.registered_at,
+          };
+          reg = {
+            id: row.id,
+            examination_id: row.examination_id,
+            student_id: row.student_id,
+            login_id: row.login_id,
+            registered_at: row.registered_at,
+            status: row.status,
+            student,
+          };
+          store.registrations.set(reg.id, reg);
+          return reg;
+        }
+      } catch {}
+
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.registrations) {
         store.hydrate(snap);
         reg = store.registrations.get(regId);
-      }
-    }
-    if (!reg) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data } = await supabase.from('registrations').select('*, student:students(*)').eq('id', regId).single();
-          if (data) {
-            reg = data as Registration;
-            store.registrations.set(regId, reg);
-            if (reg.student) store.students.set(reg.student.id, reg.student);
-          }
-        } catch {}
       }
     }
     if (!reg && regId) {
@@ -941,35 +992,49 @@ export const db = {
   },
 
   async getRegistrationsByExamId(examId: string): Promise<Registration[]> {
-    const supabase = createAdminClient();
-    if (supabase) {
+    let regs = Array.from(store.registrations.values()).filter((r) => r.examination_id === examId);
+
+    if (regs.length === 0) {
       try {
-        const { data, error } = await supabase
-          .from('registrations')
-          .select('*, student:students(*)')
-          .eq('examination_id', examId);
-        if (!error && data && data.length > 0) {
-          data.forEach((r: any) => {
-            store.registrations.set(r.id, r);
-            if (r.student) {
-              store.students.set(r.student.id, r.student);
-              if (r.student.roll_number) {
-                if (!store.studentByRoll) store.studentByRoll = new Map();
-                store.studentByRoll.set(r.student.roll_number.trim().toUpperCase(), r.student.id);
-              }
+        const { rows } = await queryPg(`
+          SELECT r.*, s.roll_number, s.full_name, s.email, s.attributes
+          FROM registrations r
+          JOIN students s ON s.id = r.student_id
+          WHERE r.examination_id = $1
+        `, [examId]);
+        if (rows.length > 0) {
+          return rows.map((row) => {
+            const student: Student = {
+              id: row.student_id,
+              roll_number: row.roll_number,
+              login_id: row.login_id || row.roll_number,
+              full_name: row.full_name,
+              email: row.email,
+              attributes: row.attributes || {},
+              created_at: row.registered_at,
+            };
+            store.students.set(student.id, student);
+            if (student.roll_number) {
+              if (!store.studentByRoll) store.studentByRoll = new Map();
+              store.studentByRoll.set(student.roll_number.trim().toUpperCase(), student.id);
             }
+            const reg: Registration = {
+              id: row.id,
+              examination_id: row.examination_id,
+              student_id: row.student_id,
+              login_id: row.login_id,
+              registered_at: row.registered_at,
+              status: row.status,
+              student,
+            };
+            store.registrations.set(reg.id, reg);
+            return reg;
           });
-          return (data as Registration[]).map((r) => ({
-            ...r,
-            student: store.students.get(r.student_id) || r.student,
-          }));
         }
       } catch (err) {
-        console.warn('[Supabase getRegistrationsByExamId error]', err);
+        console.warn('[PostgreSQL getRegistrationsByExamId error]', err);
       }
     }
-
-    let regs = Array.from(store.registrations.values()).filter((r) => r.examination_id === examId);
 
     if (regs.length === 0) {
       const snap = resilientStorage.loadSnapshot();
@@ -986,12 +1051,22 @@ export const db = {
   },
 
   async deleteRegistration(registrationId: string): Promise<boolean> {
-    store.registrations.delete(registrationId);
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('registrations').delete().eq('id', registrationId);
-      } catch {}
+    const reg = store.registrations.get(registrationId);
+    if (reg) {
+      store.registrations.delete(registrationId);
+      if (reg.student_id) {
+        const student = store.students.get(reg.student_id);
+        if (student && student.roll_number) {
+          const key = `${reg.examination_id}_${student.roll_number.trim().toUpperCase()}`;
+          store.regByExamAndRoll.delete(key);
+        }
+      }
+    }
+    try {
+      const pool = getPgPool();
+      await pool.query('DELETE FROM registrations WHERE id = $1', [registrationId]);
+    } catch (err) {
+      console.warn('[PostgreSQL deleteRegistration error]', err);
     }
     resilientStorage.scheduleSave(() => store.toSnapshot());
     return true;
@@ -1121,67 +1196,32 @@ export const db = {
     store.examinations.set(params.examId, exam);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
-    // Batch upsert to Supabase
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data: exExists } = await supabase.from('examinations').select('id').eq('id', params.examId).maybeSingle();
-        if (!exExists) {
-          await supabase.from('examinations').upsert({
-            id: params.examId,
-            name: exam.name || 'Campus Examination',
-            slug: exam.slug || params.examId,
-            status: exam.status || 'published',
-            auth_mode: authMode,
-            login_identifier_field: loginField,
-            login_identifier_label: loginLabel,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-        }
-
-        if (params.replaceExisting) {
-          await supabase.from('registrations').delete().eq('examination_id', params.examId);
-        }
-
-        const chunkSize = 50;
-        for (let i = 0; i < newStudents.length; i += chunkSize) {
-          await supabase.from('students').upsert(
-            newStudents.slice(i, i + chunkSize).map((s) => ({
-              id: s.id,
-              full_name: s.full_name,
-              email: s.email,
-              roll_number: s.roll_number,
-              login_id: s.login_id,
-              examination_id: s.examination_id,
-              created_at: s.created_at,
-            }))
-          );
-        }
-
-        for (let i = 0; i < newRegistrations.length; i += chunkSize) {
-          await supabase.from('registrations').upsert(
-            newRegistrations.slice(i, i + chunkSize).map((r) => ({
-              id: r.id,
-              examination_id: r.examination_id,
-              student_id: r.student_id,
-              login_id: r.login_id,
-              registered_at: r.registered_at,
-              status: r.status,
-            }))
-          );
-        }
-
-        await supabase.from('examinations').update({
-          auth_mode: authMode,
-          login_identifier_field: loginField,
-          login_identifier_label: loginLabel,
-          roster_count: currentExamRegs.length,
-          updated_at: new Date().toISOString(),
-        }).eq('id', params.examId);
-      } catch (err) {
-        console.warn('[Supabase importStudentRoster sync error]', err);
+    // Batch upsert to PostgreSQL
+    try {
+      const pool = getPgPool();
+      if (params.replaceExisting) {
+        await pool.query('DELETE FROM registrations WHERE examination_id = $1', [params.examId]);
       }
+      for (const s of newStudents) {
+        await pool.query(`
+          INSERT INTO students (id, roll_number, login_id, full_name, email, examination_id, created_at)
+          VALUES ($1, $2, $2, $3, $4, $5, NOW())
+          ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email
+        `, [s.id, s.roll_number, s.login_id, s.full_name, s.email, s.examination_id]);
+      }
+      for (const r of newRegistrations) {
+        await pool.query(`
+          INSERT INTO registrations (id, examination_id, student_id, login_id, registered_at, status)
+          VALUES ($1, $2, $3, $4, NOW(), 'registered')
+          ON CONFLICT (id) DO NOTHING
+        `, [r.id, r.examination_id, r.student_id, r.login_id]);
+      }
+      await pool.query(
+        'UPDATE examinations SET auth_mode = $1, login_identifier_field = $2, login_identifier_label = $3, roster_count = $4, updated_at = NOW() WHERE id = $5',
+        [authMode, loginField, loginLabel, currentExamRegs.length, params.examId]
+      );
+    } catch (err) {
+      console.warn('[PostgreSQL importStudentRoster sync error]', err);
     }
 
     return {
@@ -1231,13 +1271,20 @@ export const db = {
     });
 
     if (!match) {
-      const autoReg = await this.registerStudent({
-        examId: exam.id,
-        fullName: `Candidate ${cleanLogin}`,
-        email: `${cleanLogin.toLowerCase()}@student.exam`,
-        rollNumber: cleanLogin,
-      });
-      match = autoReg.registration;
+      if (exam.auth_mode === 'open') {
+        const autoReg = await this.registerStudent({
+          examId: exam.id,
+          fullName: `Candidate ${cleanLogin}`,
+          email: `${cleanLogin.toLowerCase()}@student.exam`,
+          rollNumber: cleanLogin,
+        });
+        match = autoReg.registration;
+      } else {
+        return {
+          verified: false,
+          error: `Your Roll Number / ID "${cleanLogin}" is not registered in this exam. Please contact the exam administrator to add your name to the authorized roster.`,
+        };
+      }
     }
 
     const student = store.students.get(match.student_id) || match.student;
@@ -1266,18 +1313,14 @@ export const db = {
     store.examinations.set(params.examId, exam);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('examinations').update({
-          auth_mode: params.authMode,
-          login_identifier_field: params.loginIdentifierField || exam.login_identifier_field,
-          login_identifier_label: params.loginIdentifierLabel || exam.login_identifier_label,
-          updated_at: new Date().toISOString(),
-        }).eq('id', params.examId);
-      } catch (err) {
-        console.warn('[Supabase updateExamAuthSettings error]', err);
-      }
+    try {
+      const pool = getPgPool();
+      await pool.query(
+        'UPDATE examinations SET auth_mode = $1, login_identifier_field = $2, login_identifier_label = $3, updated_at = NOW() WHERE id = $4',
+        [params.authMode, exam.login_identifier_field, exam.login_identifier_label, params.examId]
+      );
+    } catch (err) {
+      console.warn('[PostgreSQL updateExamAuthSettings error]', err);
     }
 
     return exam;
@@ -1299,17 +1342,51 @@ export const db = {
     }
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('registrations').delete().eq('examination_id', examId);
-        await supabase.from('examinations').update({ roster_count: 0 }).eq('id', examId);
-      } catch (err) {
-        console.warn('[Supabase clearStudentRoster sync error]', err);
-      }
+    try {
+      const pool = getPgPool();
+      await pool.query('DELETE FROM registrations WHERE examination_id = $1', [examId]);
+      await pool.query('UPDATE examinations SET roster_count = 0, updated_at = NOW() WHERE id = $1', [examId]);
+    } catch (err) {
+      console.warn('[PostgreSQL clearStudentRoster sync error]', err);
     }
 
     return true;
+  },
+
+  async getExamStudentStats(examId: string): Promise<{ registered: number; attempted: number; notWritten: number }> {
+    try {
+      const regs = await this.getRegistrationsByExamId(examId);
+      const registered = regs.length;
+
+      let attempted = 0;
+      try {
+        const { rows } = await queryPg(
+          `SELECT COUNT(DISTINCT ea.registration_id) as count 
+           FROM examination_attempts ea
+           JOIN examination_rounds er ON er.id = ea.round_id
+           WHERE er.examination_id = $1`,
+          [examId]
+        );
+        attempted = parseInt(rows[0]?.count || '0', 10);
+      } catch {
+        // Fallback to in-memory store
+        const regIds = new Set(regs.map((r) => r.id));
+        const attSet = new Set(
+          Array.from(store.attempts.values())
+            .filter((a) => regIds.has(a.registration_id))
+            .map((a) => a.registration_id)
+        );
+        attempted = attSet.size;
+      }
+
+      return {
+        registered,
+        attempted,
+        notWritten: Math.max(0, registered - attempted),
+      };
+    } catch {
+      return { registered: 0, attempted: 0, notWritten: 0 };
+    }
   },
 
   async getComprehensiveStorageMetrics() {
@@ -1460,33 +1537,20 @@ export const db = {
     const healthStatus: 'healthy' | 'warning' | 'critical' =
       percentUsed < 70 ? 'healthy' : percentUsed < 90 ? 'warning' : 'critical';
 
-    const supabase = createAdminClient();
-    let supabaseStatus = 'disconnected';
-    let supabaseLatencyMs = 0;
-    let supabaseMessage = 'No remote connection';
+    let supabaseStatus = 'connected';
+    let supabaseLatencyMs = 1;
+    let supabaseMessage = 'Local PostgreSQL 17 active (localhost:5432)';
 
-    if (supabase) {
-      try {
-        const start = Date.now();
-        const { error } = await supabase.from('examinations').select('id').limit(1);
-        supabaseLatencyMs = Date.now() - start;
-        if (!error) {
-          supabaseStatus = 'connected';
-          supabaseMessage = 'Cloud PostgreSQL connection verified';
-        } else if (error.code === 'PGRST205') {
-          supabaseStatus = 'schema_pending';
-          supabaseMessage = 'Connected to Supabase PostgreSQL (Schema migrations pending - running on local resilient store)';
-        } else {
-          supabaseStatus = 'degraded';
-          supabaseMessage = error.message;
-        }
-      } catch (e: any) {
-        supabaseStatus = 'error';
-        supabaseMessage = e.message || 'Connection failed';
-      }
-    } else {
-      supabaseStatus = 'not_configured';
-      supabaseMessage = 'Supabase environment variables not configured';
+    try {
+      const pool = getPgPool();
+      const start = Date.now();
+      await pool.query('SELECT 1');
+      supabaseLatencyMs = Date.now() - start;
+      supabaseStatus = 'connected';
+      supabaseMessage = 'Local PostgreSQL 17 active';
+    } catch (e: any) {
+      supabaseStatus = 'error';
+      supabaseMessage = e.message || 'PostgreSQL connection failed';
     }
 
     const formatBytes = (b: number): string => {
@@ -1518,10 +1582,10 @@ export const db = {
       },
       supabase: {
         status: supabaseStatus,
-        provider: 'Supabase PostgreSQL (Cloud)',
+        provider: 'PostgreSQL 17 Enterprise Engine',
         latencyMs: supabaseLatencyMs,
         message: supabaseMessage,
-        url: process.env.NEXT_PUBLIC_SUPABASE_URL || 'Not Configured',
+        url: 'postgresql://localhost:5432/exams_db',
       },
       entities: entities.map((e) => ({
         ...e,
@@ -1567,65 +1631,59 @@ export const db = {
     // Flush synchronous clean snapshot to disk
     resilientStorage.flushSync(() => store.toSnapshot());
 
-    // Wipe rows from Supabase (preserving table structures)
-    let supabaseResult = { success: true, affectedTables: [] as string[], error: undefined as string | undefined };
-    const supabase = createAdminClient();
-    if (supabase) {
-      const tablesToWipe: Record<string, string[]> = {
-        full_reset: [
-          'cheating_events',
-          'examination_audit_logs',
-          'attempt_answers',
-          'examination_results',
-          'round_qualifications',
-          'examination_attempts',
-          'ocr_jobs',
-          'pdf_documents',
-          'answer_keys',
-          'question_options',
-          'questions',
-          'question_banks',
-          'registrations',
-          'students',
-          'examination_rounds',
-          'examinations',
-        ],
-        clear_attempts: [
-          'cheating_events',
-          'attempt_answers',
-          'examination_results',
-          'round_qualifications',
-          'examination_attempts',
-        ],
-        clear_logs: [
-          'cheating_events',
-          'examination_audit_logs',
-        ],
-        clear_ocr: [
-          'ocr_jobs',
-          'pdf_documents',
-        ],
-        clear_students: [
-          'round_qualifications',
-          'examination_results',
-          'attempt_answers',
-          'examination_attempts',
-          'registrations',
-          'students',
-        ],
-      };
+    // Wipe rows from PostgreSQL (preserving table structures)
+    const tablesToWipe: Record<string, string[]> = {
+      full_reset: [
+        'cheating_events',
+        'examination_audit_logs',
+        'attempt_answers',
+        'examination_results',
+        'round_qualifications',
+        'examination_attempts',
+        'ocr_jobs',
+        'pdf_documents',
+        'answer_keys',
+        'question_options',
+        'questions',
+        'question_banks',
+        'registrations',
+        'students',
+        'examination_rounds',
+        'examinations',
+      ],
+      clear_attempts: [
+        'cheating_events',
+        'attempt_answers',
+        'examination_results',
+        'round_qualifications',
+        'examination_attempts',
+      ],
+      clear_logs: [
+        'cheating_events',
+        'examination_audit_logs',
+      ],
+      clear_ocr: [
+        'ocr_jobs',
+        'pdf_documents',
+      ],
+      clear_students: [
+        'round_qualifications',
+        'examination_results',
+        'attempt_answers',
+        'examination_attempts',
+        'registrations',
+        'students',
+      ],
+    };
 
-      const targetTables = tablesToWipe[action] || [];
-      const affected: string[] = [];
+    const targetTables = tablesToWipe[action] || [];
+    try {
+      const pool = getPgPool();
       for (const tbl of targetTables) {
-        try {
-          await supabase.from(tbl).delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          affected.push(tbl);
-        } catch {
-          // Table may not exist or may be unmigrated; continue
-        }
+        await pool.query(`DELETE FROM "${tbl}"`);
       }
-      supabaseResult = { success: true, affectedTables: affected, error: undefined };
+    } catch (err) {
+      console.warn('[PostgreSQL cleanDatabaseStorage error]', err);
     }
 
     // Log the maintenance action into audit trail
@@ -1638,7 +1696,7 @@ export const db = {
         action,
         reseed,
         freedBytesApprox: bytesBefore,
-        supabaseTablesAffected: supabaseResult.affectedTables,
+        tablesAffected: targetTables.length,
         timestamp: new Date().toISOString(),
       },
       created_at: new Date().toISOString(),
@@ -1679,7 +1737,7 @@ export const db = {
       remainingBytes: bytesAfter,
       remainingFormatted: formatBytes(bytesAfter),
       affectedEntities,
-      supabaseStatus: supabaseResult,
+      supabaseStatus: { success: true, affectedTables: targetTables.length },
       message,
     };
   },
@@ -1708,19 +1766,42 @@ export const db = {
 
   // QUESTIONS & ATTEMPTS
   async getQuestionsByRoundId(roundId: string, isAdmin = false): Promise<Question[]> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('questions')
-          .select('*, options:question_options(*), answer_key:answer_keys(*)')
-          .eq('round_id', roundId)
-          .order('sort_order', { ascending: true });
+    let questions = Array.from(store.questions.values())
+      .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
+      .sort((a, b) => a.sort_order - b.sort_order);
 
-        if (!error && data && data.length > 0) {
-          const list: Question[] = [];
-          data.forEach((q: any) => {
-            const options = (q.options || []).sort((a: any, b: any) => a.sort_order - b.sort_order);
+    if (questions.length === 0) {
+      const snap = resilientStorage.loadSnapshot();
+      if (snap && snap.questions) {
+        store.hydrate(snap);
+        questions = Array.from(store.questions.values())
+          .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
+          .sort((a, b) => a.sort_order - b.sort_order);
+      }
+    }
+
+    // Query Local PostgreSQL if memory/snapshot had no questions
+    if (questions.length === 0) {
+      try {
+        const pool = getPgPool();
+        const { rows: pgQuestions } = await pool.query(
+          'SELECT * FROM questions WHERE round_id = $1 ORDER BY sort_order ASC',
+          [roundId]
+        );
+        if (pgQuestions.length > 0) {
+          const qIds = pgQuestions.map((q) => q.id);
+          const { rows: pgOpts } = await pool.query(
+            'SELECT * FROM question_options WHERE question_id = ANY($1) ORDER BY sort_order ASC',
+            [qIds]
+          );
+          const { rows: pgAks } = await pool.query(
+            'SELECT * FROM answer_keys WHERE question_id = ANY($1)',
+            [qIds]
+          );
+
+          for (const q of pgQuestions) {
+            const opts = pgOpts.filter((o) => o.question_id === q.id);
+            const ak = pgAks.find((a) => a.question_id === q.id);
             const qObj: Question = {
               id: q.id,
               bank_id: q.bank_id,
@@ -1737,54 +1818,26 @@ export const db = {
               sort_order: q.sort_order,
               created_at: q.created_at,
               updated_at: q.updated_at,
-              options,
+              options: opts,
             };
             store.questions.set(q.id, qObj);
-            if (q.answer_key) {
-              const ak = Array.isArray(q.answer_key) ? q.answer_key[0] : q.answer_key;
-              if (ak) {
-                store.answerKeys.set(q.id, {
-                  id: ak.id || `ak-${q.id}`,
-                  question_id: q.id,
-                  correct_option_label: ak.correct_option_label || 'A',
-                  created_at: ak.created_at,
-                  updated_at: ak.updated_at,
-                });
-              }
-            }
-            if (isAdmin || q.status === 'approved' || !q.status) {
-              list.push(qObj);
-            }
-          });
-          if (list.length > 0) {
-            if (isAdmin) {
-              return list.map((q) => {
-                const ak = store.answerKeys.get(q.id);
-                return {
-                  ...q,
-                  correct_option_label: ak?.correct_option_label,
-                };
+            if (ak) {
+              store.answerKeys.set(q.id, {
+                id: ak.id,
+                question_id: q.id,
+                correct_option_label: ak.correct_option_label,
+                created_at: ak.created_at,
+                updated_at: ak.updated_at,
               });
             }
-            return list;
           }
+
+          questions = Array.from(store.questions.values())
+            .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved' || !q.status))
+            .sort((a, b) => a.sort_order - b.sort_order);
         }
       } catch (err) {
-        console.warn('[Supabase getQuestionsByRoundId error]', err);
-      }
-    }
-
-    let questions = Array.from(store.questions.values())
-      .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
-      .sort((a, b) => a.sort_order - b.sort_order);
-
-    if (questions.length === 0) {
-      const snap = resilientStorage.loadSnapshot();
-      if (snap && snap.questions) {
-        store.hydrate(snap);
-        questions = Array.from(store.questions.values())
-          .filter((q) => q.round_id === roundId && (isAdmin || q.status === 'approved'))
-          .sort((a, b) => a.sort_order - b.sort_order);
+        console.warn('[PostgreSQL getQuestionsByRoundId fallback error]', err);
       }
     }
 
@@ -1815,99 +1868,8 @@ export const db = {
     });
   },
 
-  async syncRoundQuestionsToSupabase(roundId: string): Promise<void> {
-    const roundQuestions = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
-    if (roundQuestions.length === 0) return;
-
-    const supabase = createAdminClient();
-    if (!supabase) return;
-
-    try {
-      const { data: roundInDb } = await supabase.from('examination_rounds').select('id, examination_id').eq('id', roundId).maybeSingle();
-      if (!roundInDb) {
-        const round = store.rounds.get(roundId) || (await this.getRoundById(roundId));
-        if (round) {
-          const { data: examInDb } = await supabase.from('examinations').select('id').eq('id', round.examination_id).maybeSingle();
-          if (!examInDb) {
-            await supabase.from('examinations').upsert({
-              id: round.examination_id,
-              name: 'Campus Examination',
-              slug: round.examination_id,
-              status: 'published',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-          }
-          await supabase.from('examination_rounds').upsert(round);
-        }
-      }
-
-      const bankId = `bank-${roundId}`;
-      const examId = roundInDb?.examination_id || store.rounds.get(roundId)?.examination_id;
-      if (examId) {
-        await supabase.from('question_banks').upsert({
-          id: bankId,
-          examination_id: examId,
-          round_id: roundId,
-          name: store.rounds.get(roundId)?.name ? `${store.rounds.get(roundId)!.name} Question Bank` : 'Round Question Bank',
-          created_at: new Date().toISOString(),
-        });
-      }
-
-      const qRows = roundQuestions.map((q) => ({
-        id: q.id,
-        bank_id: bankId,
-        round_id: q.round_id,
-        question_text: q.question_text,
-        question_type: q.question_type,
-        difficulty: q.difficulty,
-        marks: q.marks,
-        negative_marks: q.negative_marks,
-        status: q.status,
-        ocr_confidence: q.ocr_confidence ?? 95,
-        explanation: q.explanation || null,
-        sort_order: q.sort_order,
-        created_at: q.created_at,
-        updated_at: q.updated_at,
-      }));
-
-      const optRows = roundQuestions.flatMap((q) =>
-        (q.options || []).map((opt) => ({
-          id: opt.id,
-          question_id: q.id,
-          label: opt.label,
-          option_text: opt.option_text,
-          sort_order: opt.sort_order,
-          created_at: opt.created_at || new Date().toISOString(),
-        }))
-      );
-
-      const akRows = roundQuestions.map((q) => ({
-        id: `ak-${q.id}`,
-        question_id: q.id,
-        correct_option_label: store.answerKeys.get(q.id)?.correct_option_label || 'A',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }));
-
-      const chunkSize = 50;
-      for (let i = 0; i < qRows.length; i += chunkSize) {
-        await supabase.from('questions').upsert(qRows.slice(i, i + chunkSize));
-      }
-      for (let i = 0; i < optRows.length; i += chunkSize) {
-        await supabase.from('question_options').upsert(optRows.slice(i, i + chunkSize));
-      }
-      for (let i = 0; i < akRows.length; i += chunkSize) {
-        await supabase.from('answer_keys').upsert(akRows.slice(i, i + chunkSize));
-      }
-
-      await supabase
-        .from('examination_rounds')
-        .update({ question_pool_count: roundQuestions.length, updated_at: new Date().toISOString() })
-        .eq('id', roundId);
-    } catch (err) {
-      console.warn('[Supabase syncRoundQuestionsToSupabase error]', err);
-    }
+  async syncRoundQuestionsToSupabase(_roundId: string): Promise<void> {
+    // Deprecated - questions are persisted directly to PostgreSQL
   },
 
   async createQuestion(questionData: Partial<Question> & { correct_option_label?: string }): Promise<Question> {
@@ -1942,65 +1904,74 @@ export const db = {
       });
     }
 
-    resilientStorage.scheduleSave(() => store.toSnapshot());
+    try {
+      const pool = getPgPool();
+      await pool.query(`
+        INSERT INTO questions (id, round_id, question_text, question_type, difficulty, marks, negative_marks, status, sort_order, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          question_text = EXCLUDED.question_text,
+          question_type = EXCLUDED.question_type,
+          difficulty = EXCLUDED.difficulty,
+          marks = EXCLUDED.marks,
+          negative_marks = EXCLUDED.negative_marks,
+          status = EXCLUDED.status,
+          sort_order = EXCLUDED.sort_order,
+          updated_at = NOW()
+      `, [
+        newQuestion.id,
+        newQuestion.round_id,
+        newQuestion.question_text,
+        newQuestion.question_type,
+        newQuestion.difficulty,
+        newQuestion.marks,
+        newQuestion.negative_marks,
+        newQuestion.status,
+        newQuestion.sort_order,
+      ]);
 
-    // Sync to Supabase
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('questions').upsert({
-          id: newQuestion.id,
-          round_id: newQuestion.round_id,
-          question_text: newQuestion.question_text,
-          question_type: newQuestion.question_type,
-          difficulty: newQuestion.difficulty,
-          marks: newQuestion.marks,
-          negative_marks: newQuestion.negative_marks,
-          status: newQuestion.status,
-          sort_order: newQuestion.sort_order,
-          created_at: newQuestion.created_at,
-          updated_at: newQuestion.updated_at,
-        });
-
-        if (newQuestion.options && newQuestion.options.length > 0) {
-          await supabase.from('question_options').upsert(
-            newQuestion.options.map((opt) => ({
-              id: opt.id,
-              question_id: newQuestion.id,
-              label: opt.label,
-              option_text: opt.option_text,
-              sort_order: opt.sort_order,
-              created_at: opt.created_at || new Date().toISOString(),
-            }))
-          );
+      if (newQuestion.options && newQuestion.options.length > 0) {
+        for (const opt of newQuestion.options) {
+          await pool.query(`
+            INSERT INTO question_options (id, question_id, label, option_text, sort_order, created_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+              label = EXCLUDED.label,
+              option_text = EXCLUDED.option_text,
+              sort_order = EXCLUDED.sort_order
+          `, [opt.id, newQuestion.id, opt.label, opt.option_text, opt.sort_order]);
         }
-
-        if (questionData.correct_option_label) {
-          await supabase.from('answer_keys').upsert({
-            id: `ak-${id}`,
-            question_id: id,
-            correct_option_label: questionData.correct_option_label,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-        }
-      } catch (err) {
-        console.warn('[Supabase createQuestion sync error]', err);
       }
+
+      if (questionData.correct_option_label) {
+        await pool.query(`
+          INSERT INTO answer_keys (id, question_id, correct_option_label, created_at, updated_at)
+          VALUES ($1, $2, $3, NOW(), NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            correct_option_label = EXCLUDED.correct_option_label,
+            updated_at = NOW()
+        `, [`ak-${id}`, id, questionData.correct_option_label]);
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL createQuestion error]', err);
     }
 
+    resilientStorage.scheduleSave(() => store.toSnapshot());
     return { ...newQuestion, correct_option_label: questionData.correct_option_label };
   },
 
   async deleteQuestion(id: string): Promise<boolean> {
+    try {
+      const pool = getPgPool();
+      await pool.query('DELETE FROM answer_keys WHERE question_id = $1', [id]);
+      await pool.query('DELETE FROM question_options WHERE question_id = $1', [id]);
+      await pool.query('DELETE FROM questions WHERE id = $1', [id]);
+    } catch (err) {
+      console.warn('[PostgreSQL deleteQuestion error]', err);
+    }
+
     store.questions.delete(id);
     store.answerKeys.delete(id);
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase.from('questions').delete().eq('id', id);
-      } catch {}
-    }
     resilientStorage.scheduleSave(() => store.toSnapshot());
     return true;
   },
@@ -2017,35 +1988,76 @@ export const db = {
     const existingAttemptId = store.attemptByRegAndRound.get(regRoundKey);
     let existing = existingAttemptId ? store.attempts.get(existingAttemptId) : undefined;
 
-    const round = store.rounds.get(params.roundId);
+    const round = store.rounds.get(params.roundId) || (await this.getRoundById(params.roundId));
     if (!round) throw new Error('Round not found');
 
-    const supabase = createAdminClient();
-    if (!existing && supabase) {
-      try {
-        const { data: sbAtt } = await supabase
-          .from('examination_attempts')
-          .select('*')
-          .eq('registration_id', params.registrationId)
-          .eq('round_id', params.roundId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+    // Strict multi-round progression check: If round > 1, verify student passed previous round
+    if (round.round_number > 1) {
+      const allRounds = await this.getRoundsByExamId(round.examination_id);
+      allRounds.sort((a, b) => a.round_number - b.round_number);
+      const prevRound = allRounds.find((r) => r.round_number === round.round_number - 1);
+      if (prevRound) {
+        let prevResult: ExaminationResult | null = null;
+        for (const res of store.results.values()) {
+          if (res.registration_id === params.registrationId && res.round_id === prevRound.id) {
+            prevResult = res;
+            break;
+          }
+        }
+        if (!prevResult) {
+          try {
+            const pool = getPgPool();
+            const { rows: pgRes } = await pool.query(
+              'SELECT * FROM examination_results WHERE registration_id = $1 AND round_id = $2',
+              [params.registrationId, prevRound.id]
+            );
+            if (pgRes.length > 0) {
+              prevResult = pgRes[0] as any;
+            }
+          } catch {}
+        }
 
-        if (sbAtt) {
+        if (!prevResult) {
+          const err: any = new Error(
+            `NOT_ELIGIBLE: You have not completed Round ${prevRound.round_number} (${prevRound.name}) yet. You must complete Round ${prevRound.round_number} first.`
+          );
+          err.notEligible = true;
+          throw err;
+        }
+
+        if (prevResult.is_qualified !== true) {
+          const err: any = new Error(
+            `DISQUALIFIED: You did not score the minimum qualifying marks in Round ${prevRound.round_number} (${prevRound.name}). You are disqualified from advancing to Round ${round.round_number}.`
+          );
+          err.disqualified = true;
+          throw err;
+        }
+      }
+    }
+
+    // Query local PostgreSQL for existing attempt
+    if (!existing) {
+      try {
+        const pool = getPgPool();
+        const { rows: pgAtts } = await pool.query(
+          'SELECT * FROM examination_attempts WHERE registration_id = $1 AND round_id = $2 ORDER BY created_at DESC LIMIT 1',
+          [params.registrationId, params.roundId]
+        );
+        if (pgAtts.length > 0) {
+          const a = pgAtts[0];
           existing = {
-            id: sbAtt.id,
-            registration_id: sbAtt.registration_id,
-            round_id: sbAtt.round_id,
-            started_at: sbAtt.started_at,
-            deadline_at: sbAtt.deadline_at,
-            submitted_at: sbAtt.submitted_at,
-            status: sbAtt.status as any,
-            assigned_question_ids: Array.isArray(sbAtt.assigned_question_ids) ? sbAtt.assigned_question_ids : [],
-            cheating_warnings: sbAtt.cheating_warnings || 0,
-            ip_address: sbAtt.ip_address,
-            user_agent: sbAtt.user_agent,
-            created_at: sbAtt.created_at,
+            id: a.id,
+            registration_id: a.registration_id,
+            round_id: a.round_id,
+            started_at: a.started_at,
+            deadline_at: a.deadline_at,
+            submitted_at: a.submitted_at,
+            status: a.status as any,
+            assigned_question_ids: Array.isArray(a.assigned_question_ids) ? a.assigned_question_ids : [],
+            cheating_warnings: a.cheating_warnings || 0,
+            ip_address: a.ip_address,
+            user_agent: a.user_agent,
+            created_at: a.created_at,
           };
           store.attempts.set(existing.id, existing);
           store.attemptByRegAndRound.set(regRoundKey, existing.id);
@@ -2160,23 +2172,17 @@ export const db = {
     store.attemptByRegAndRound.set(regRoundKey, attemptId);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
-    // Synchronize attempt creation to Supabase
-    if (supabase) {
-      try {
-        await supabase.from('examination_attempts').upsert({
-          id: attempt.id,
-          registration_id: attempt.registration_id,
-          round_id: attempt.round_id,
-          started_at: attempt.started_at,
-          deadline_at: attempt.deadline_at,
-          status: attempt.status,
-          assigned_question_ids: attempt.assigned_question_ids,
-          cheating_warnings: attempt.cheating_warnings,
-          ip_address: attempt.ip_address,
-          user_agent: attempt.user_agent,
-          created_at: attempt.created_at,
-        });
-      } catch {}
+    // Synchronize attempt creation to Local PostgreSQL
+    try {
+      const pool = getPgPool();
+      await pool.query(
+        `INSERT INTO examination_attempts (id, registration_id, round_id, started_at, deadline_at, status, assigned_question_ids, cheating_warnings, ip_address, user_agent, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (id) DO NOTHING`,
+        [attempt.id, attempt.registration_id, attempt.round_id, attempt.started_at, attempt.deadline_at, attempt.status, attempt.assigned_question_ids, attempt.cheating_warnings, attempt.ip_address, attempt.user_agent, attempt.created_at]
+      );
+    } catch (pgErr) {
+      console.warn('[startAttempt] Local PG save warning:', pgErr);
     }
 
     // Update registration status to 'started'
@@ -2253,25 +2259,24 @@ export const db = {
     // High performance append to WAL (zero event loop freeze)
     resilientStorage.appendAnswerDeltas(updatedAnswers);
 
-    // Persist to Supabase attempt_answers table so state is preserved across serverless lambdas
-    const supabase = createAdminClient();
-    if (supabase && updatedAnswers.length > 0) {
-      try {
-        const rowsToUpsert = updatedAnswers.map((ans) => ({
-          id: ans.id,
-          attempt_id: ans.attempt_id,
-          question_id: ans.question_id,
-          selected_option: ans.selected_option,
-          code_snippet: ans.code_snippet,
-          code_language: ans.code_language,
-          is_marked_for_review: ans.is_marked_for_review,
-          answered_at: ans.answered_at,
-          updated_at: ans.updated_at,
-        }));
-        await supabase.from('attempt_answers').upsert(rowsToUpsert);
-      } catch (err) {
-        console.warn('[saveAttemptAnswersBatch] Supabase upsert error:', err);
+    // Persist to Local PostgreSQL attempt_answers table
+    try {
+      const pool = getPgPool();
+      for (const ans of updatedAnswers) {
+        await pool.query(
+          `INSERT INTO attempt_answers (id, attempt_id, question_id, selected_option, code_snippet, code_language, is_marked_for_review, answered_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (attempt_id, question_id) DO UPDATE SET 
+             selected_option = EXCLUDED.selected_option, 
+             code_snippet = EXCLUDED.code_snippet, 
+             code_language = EXCLUDED.code_language, 
+             is_marked_for_review = EXCLUDED.is_marked_for_review,
+             updated_at = EXCLUDED.updated_at`,
+          [ans.id, ans.attempt_id, ans.question_id, ans.selected_option, ans.code_snippet, ans.code_language, ans.is_marked_for_review, ans.answered_at, ans.updated_at]
+        );
       }
+    } catch (pgErr) {
+      console.warn('[saveAttemptAnswersBatch] Local PG save warning:', pgErr);
     }
 
     return updatedAnswers;
@@ -2340,19 +2345,13 @@ export const db = {
     store.cheatingEvents.push(event);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        await supabase
-          .from('examination_attempts')
-          .update({
-            cheating_warnings: warningNumber,
-            status: attempt.status,
-            submitted_at: attempt.submitted_at,
-          })
-          .eq('id', attempt.id);
-      } catch {}
-    }
+    try {
+      const pool = getPgPool();
+      await pool.query(
+        'UPDATE examination_attempts SET cheating_warnings = $1, status = $2, submitted_at = $3 WHERE id = $4',
+        [warningNumber, attempt.status, attempt.submitted_at, attempt.id]
+      );
+    } catch {}
 
     return { warningNumber, maxWarnings, isTerminated };
   },
@@ -2442,24 +2441,21 @@ export const db = {
       let unansweredCount = 0;
       let rawScore = 0;
 
-      const supabase = createAdminClient();
-
       if (round.round_type === 'coding') {
         let codeAnswered = 0;
         for (const qId of attempt.assigned_question_ids) {
           const key = `${attemptId}_${qId}`;
           let answer = store.answers.get(key);
-          if (!answer && supabase) {
+          if (!answer) {
             try {
-              const { data: dbAns } = await supabase
-                .from('attempt_answers')
-                .select('*')
-                .eq('attempt_id', attemptId)
-                .eq('question_id', qId)
-                .maybeSingle();
-              if (dbAns) {
-                answer = dbAns;
-                store.answers.set(key, dbAns);
+              const pool = getPgPool();
+              const { rows: dbAns } = await pool.query(
+                'SELECT * FROM attempt_answers WHERE attempt_id = $1 AND question_id = $2 LIMIT 1',
+                [attemptId, qId]
+              );
+              if (dbAns.length > 0) {
+                answer = dbAns[0] as AttemptAnswer;
+                store.answers.set(key, answer);
               }
             } catch {}
           }
@@ -2477,17 +2473,18 @@ export const db = {
           await this.getQuestionsByRoundId(attempt.round_id);
         }
 
-        // Fetch answers from Supabase if missing in store.answers
+        // Fetch answers from PostgreSQL if missing in store.answers
         let loadedDbAnswers = false;
         for (const qId of attempt.assigned_question_ids) {
           const key = `${attemptId}_${qId}`;
-          if (!store.answers.has(key) && !loadedDbAnswers && supabase) {
+          if (!store.answers.has(key) && !loadedDbAnswers) {
             loadedDbAnswers = true;
             try {
-              const { data: dbAnswers } = await supabase
-                .from('attempt_answers')
-                .select('*')
-                .eq('attempt_id', attemptId);
+              const pool = getPgPool();
+              const { rows: dbAnswers } = await pool.query(
+                'SELECT * FROM attempt_answers WHERE attempt_id = $1',
+                [attemptId]
+              );
               if (dbAnswers) {
                 for (const a of dbAnswers) {
                   store.answers.set(`${attemptId}_${a.question_id}`, a);
@@ -2518,15 +2515,6 @@ export const db = {
       attempt.submitted_at = new Date().toISOString();
       store.attempts.set(attempt.id, attempt);
 
-      if (supabase) {
-        try {
-          await supabase.from('examination_attempts').update({
-            status: 'submitted',
-            submitted_at: attempt.submitted_at,
-          }).eq('id', attempt.id);
-        } catch {}
-      }
-
       // Save result
       const result: ExaminationResult = {
         id: `res-${attemptId}`,
@@ -2544,23 +2532,21 @@ export const db = {
       };
       store.results.set(attemptId, result);
 
-      if (supabase) {
-        try {
-          await supabase.from('examination_results').upsert({
-            id: result.id,
-            attempt_id: result.attempt_id,
-            registration_id: result.registration_id,
-            round_id: result.round_id,
-            score: result.score,
-            total_marks: result.total_marks,
-            qualifying_marks: result.qualifying_marks,
-            is_qualified: result.is_qualified,
-            correct_count: result.correct_count,
-            wrong_count: result.wrong_count,
-            unanswered_count: result.unanswered_count,
-            evaluated_at: result.evaluated_at,
-          });
-        } catch {}
+      // Persist result and status directly to local PostgreSQL
+      try {
+        const pool = getPgPool();
+        await pool.query(
+          `INSERT INTO examination_results (id, attempt_id, registration_id, round_id, score, total_marks, qualifying_marks, is_qualified, correct_count, wrong_count, unanswered_count, evaluated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (id) DO UPDATE SET score = EXCLUDED.score, is_qualified = EXCLUDED.is_qualified, evaluated_at = EXCLUDED.evaluated_at`,
+          [result.id, result.attempt_id, result.registration_id, result.round_id, result.score, result.total_marks, result.qualifying_marks, result.is_qualified, result.correct_count, result.wrong_count, result.unanswered_count, result.evaluated_at]
+        );
+        await pool.query(
+          `UPDATE examination_attempts SET status = 'submitted', submitted_at = NOW() WHERE id = $1`,
+          [attemptId]
+        );
+      } catch (pgErr) {
+        console.warn('[submitAttempt] Local PG save warning:', pgErr);
       }
 
       // Dynamic next round qualification resolution
@@ -2599,16 +2585,28 @@ export const db = {
   async getAttemptResult(attemptId: string): Promise<ExaminationResult | null> {
     let res = store.results.get(attemptId);
     if (!res) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data } = await supabase.from('examination_results').select('*').eq('attempt_id', attemptId).maybeSingle();
-          if (data) {
-            res = data as ExaminationResult;
-            store.results.set(attemptId, res);
-          }
-        } catch {}
-      }
+      try {
+        const pool = getPgPool();
+        const { rows } = await pool.query('SELECT * FROM examination_results WHERE attempt_id = $1 LIMIT 1', [attemptId]);
+        if (rows.length > 0) {
+          const r = rows[0];
+          res = {
+            id: r.id,
+            attempt_id: r.attempt_id,
+            registration_id: r.registration_id,
+            round_id: r.round_id,
+            score: Number(r.score || 0),
+            total_marks: Number(r.total_marks || 0),
+            qualifying_marks: Number(r.qualifying_marks || 0),
+            is_qualified: r.is_qualified,
+            correct_count: r.correct_count,
+            wrong_count: r.wrong_count,
+            unanswered_count: r.unanswered_count,
+            evaluated_at: r.evaluated_at,
+          };
+          store.results.set(attemptId, res);
+        }
+      } catch {}
     }
     return res || null;
   },
@@ -2616,16 +2614,28 @@ export const db = {
   async getAttemptById(attemptId: string): Promise<ExaminationAttempt | null> {
     let attempt = store.attempts.get(attemptId);
     if (!attempt) {
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          const { data } = await supabase.from('examination_attempts').select('*').eq('id', attemptId).maybeSingle();
-          if (data) {
-            attempt = data as ExaminationAttempt;
-            store.attempts.set(attemptId, attempt);
-          }
-        } catch {}
-      }
+      try {
+        const pool = getPgPool();
+        const { rows } = await pool.query('SELECT * FROM examination_attempts WHERE id = $1 LIMIT 1', [attemptId]);
+        if (rows.length > 0) {
+          const a = rows[0];
+          attempt = {
+            id: a.id,
+            registration_id: a.registration_id,
+            round_id: a.round_id,
+            started_at: a.started_at,
+            deadline_at: a.deadline_at,
+            submitted_at: a.submitted_at,
+            status: a.status as any,
+            assigned_question_ids: Array.isArray(a.assigned_question_ids) ? a.assigned_question_ids : [],
+            cheating_warnings: a.cheating_warnings || 0,
+            ip_address: a.ip_address,
+            user_agent: a.user_agent,
+            created_at: a.created_at,
+          };
+          store.attempts.set(attemptId, attempt);
+        }
+      } catch {}
     }
     return attempt || null;
   },
@@ -2636,33 +2646,40 @@ export const db = {
 
   // ADMIN MONITORING & STATS
   async getAdminStats(): Promise<AdminStats> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const [{ count: totalExaminations }, { count: totalStudents }, { data: attempts }, { data: results }, { count: pendingOcrJobs }] = await Promise.all([
-          supabase.from('examinations').select('*', { count: 'exact', head: true }),
-          supabase.from('students').select('*', { count: 'exact', head: true }),
-          supabase.from('examination_attempts').select('status'),
-          supabase.from('examination_results').select('is_qualified'),
-          supabase.from('ocr_jobs').select('*', { count: 'exact', head: true }).in('status', ['uploaded', 'processing', 'queued']),
-        ]);
+    try {
+      const pool = getPgPool();
+      const [
+        { rows: examRows },
+        { rows: studentRows },
+        { rows: attemptRows },
+        { rows: resultRows },
+        { rows: ocrRows },
+      ] = await Promise.all([
+        pool.query('SELECT COUNT(*) FROM examinations'),
+        pool.query('SELECT COUNT(*) FROM students'),
+        pool.query('SELECT status FROM examination_attempts'),
+        pool.query('SELECT is_qualified FROM examination_results'),
+        pool.query("SELECT COUNT(*) FROM ocr_jobs WHERE status IN ('uploaded', 'processing', 'queued')"),
+      ]);
 
-        const studentsWriting = attempts?.filter((a) => a.status === 'in_progress').length || 0;
-        const totalSubmissions = attempts?.filter((a) => a.status === 'submitted' || a.status === 'timed_out').length || 0;
-        const qualifiedStudents = results?.filter((r) => r.is_qualified).length || 0;
-        const unqualifiedStudents = (results?.length || 0) - qualifiedStudents;
+      const totalExaminations = parseInt(examRows[0]?.count || '0', 10);
+      const totalStudents = parseInt(studentRows[0]?.count || '0', 10);
+      const studentsWriting = attemptRows.filter((a) => a.status === 'in_progress').length;
+      const totalSubmissions = attemptRows.filter((a) => a.status === 'submitted' || a.status === 'timed_out').length;
+      const qualifiedStudents = resultRows.filter((r) => r.is_qualified).length;
+      const unqualifiedStudents = (resultRows.length || 0) - qualifiedStudents;
+      const pendingOcrJobs = parseInt(ocrRows[0]?.count || '0', 10);
 
-        return {
-          totalExaminations: totalExaminations ?? store.examinations.size,
-          totalStudents: totalStudents ?? store.students.size,
-          studentsWriting,
-          totalSubmissions,
-          qualifiedStudents,
-          unqualifiedStudents,
-          pendingOcrJobs: pendingOcrJobs ?? 0,
-        };
-      } catch {}
-    }
+      return {
+        totalExaminations: totalExaminations || store.examinations.size,
+        totalStudents: totalStudents || store.students.size,
+        studentsWriting,
+        totalSubmissions,
+        qualifiedStudents,
+        unqualifiedStudents,
+        pendingOcrJobs,
+      };
+    } catch {}
 
     const totalExaminations = store.examinations.size;
     const totalStudents = store.students.size;
@@ -2693,8 +2710,6 @@ export const db = {
     const roundIds = new Set(rounds.map((r) => r.id));
     const roundIdList = Array.from(roundIds);
 
-    const supabase = createAdminClient();
-
     // 1. Load all registered students for this examination
     const registrations = await this.getRegistrationsByExamId(examId);
     const regMap = new Map<string, Registration>();
@@ -2705,99 +2720,88 @@ export const db = {
       }
     }
 
-    // 2. Fetch all attempts for these rounds from Supabase
+    // 2. Fetch all attempts for these rounds from PostgreSQL & Memory
     const attemptsMap = new Map<string, ExaminationAttempt>();
-    if (supabase && roundIdList.length > 0) {
-      try {
-        const { data: dbAttempts } = await supabase
-          .from('examination_attempts')
-          .select('*')
-          .in('round_id', roundIdList);
-
-        if (dbAttempts) {
-          for (const a of dbAttempts) {
-            const attemptObj: ExaminationAttempt = {
-              id: a.id,
-              registration_id: a.registration_id,
-              round_id: a.round_id,
-              started_at: a.started_at,
-              deadline_at: a.deadline_at,
-              submitted_at: a.submitted_at,
-              status: a.status,
-              assigned_question_ids: Array.isArray(a.assigned_question_ids) ? a.assigned_question_ids : [],
-              cheating_warnings: a.cheating_warnings || 0,
-              ip_address: a.ip_address,
-              user_agent: a.user_agent,
-              created_at: a.created_at,
-            };
-            attemptsMap.set(attemptObj.id, attemptObj);
-            store.attempts.set(attemptObj.id, attemptObj);
-          }
-        }
-      } catch (err) {
-        console.warn('[getLiveMonitoringData] Failed to fetch attempts from Supabase:', err);
-      }
-    }
-
-    // Merge in-memory attempts
     for (const a of store.attempts.values()) {
       if (roundIds.has(a.round_id)) {
         attemptsMap.set(a.id, a);
       }
     }
 
-    // 3. Fetch all examination results from Supabase
-    const resultsMap = new Map<string, ExaminationResult>();
-    if (supabase && roundIdList.length > 0) {
+    if (roundIdList.length > 0) {
       try {
-        const { data: dbResults } = await supabase
-          .from('examination_results')
-          .select('*')
-          .in('round_id', roundIdList);
-
-        if (dbResults) {
-          for (const res of dbResults) {
-            const resObj: ExaminationResult = {
-              id: res.id,
-              attempt_id: res.attempt_id,
-              registration_id: res.registration_id,
-              round_id: res.round_id,
-              score: res.score,
-              total_marks: res.total_marks,
-              qualifying_marks: res.qualifying_marks,
-              is_qualified: res.is_qualified,
-              correct_count: res.correct_count,
-              wrong_count: res.wrong_count,
-              unanswered_count: res.unanswered_count,
-              evaluated_at: res.evaluated_at,
-            };
-            resultsMap.set(resObj.attempt_id, resObj);
-            store.results.set(resObj.attempt_id, resObj);
-          }
+        const pool = getPgPool();
+        const { rows: pgAttempts } = await pool.query(
+          'SELECT * FROM examination_attempts WHERE round_id = ANY($1)',
+          [roundIdList]
+        );
+        for (const a of pgAttempts) {
+          const attemptObj: ExaminationAttempt = {
+            id: a.id,
+            registration_id: a.registration_id,
+            round_id: a.round_id,
+            started_at: a.started_at,
+            deadline_at: a.deadline_at,
+            submitted_at: a.submitted_at,
+            status: a.status,
+            assigned_question_ids: Array.isArray(a.assigned_question_ids) ? a.assigned_question_ids : [],
+            cheating_warnings: a.cheating_warnings || 0,
+            ip_address: a.ip_address,
+            user_agent: a.user_agent,
+            created_at: a.created_at,
+          };
+          attemptsMap.set(attemptObj.id, attemptObj);
+          store.attempts.set(attemptObj.id, attemptObj);
         }
-      } catch (err) {
-        console.warn('[getLiveMonitoringData] Failed to fetch results from Supabase:', err);
-      }
+      } catch {}
     }
 
-    // Merge in-memory results
+    // 3. Fetch all examination results from PostgreSQL & Memory
+    const resultsMap = new Map<string, ExaminationResult>();
     for (const res of store.results.values()) {
       if (roundIds.has(res.round_id)) {
         resultsMap.set(res.attempt_id, res);
       }
     }
 
+    if (roundIdList.length > 0) {
+      try {
+        const pool = getPgPool();
+        const { rows: pgResults } = await pool.query(
+          'SELECT * FROM examination_results WHERE round_id = ANY($1)',
+          [roundIdList]
+        );
+        for (const res of pgResults) {
+          const resObj: ExaminationResult = {
+            id: res.id,
+            attempt_id: res.attempt_id,
+            registration_id: res.registration_id,
+            round_id: res.round_id,
+            score: Number(res.score ?? 0),
+            total_marks: Number(res.total_marks || 0),
+            qualifying_marks: Number(res.qualifying_marks || 0),
+            is_qualified: res.is_qualified,
+            correct_count: res.correct_count,
+            wrong_count: res.wrong_count,
+            unanswered_count: res.unanswered_count,
+            evaluated_at: res.evaluated_at,
+          };
+          resultsMap.set(resObj.attempt_id, resObj);
+          store.results.set(resObj.attempt_id, resObj);
+        }
+      } catch {}
+    }
+
     // 4. Fetch latest code snippets for coding rounds if needed
     const codeSnippetMap = new Map<string, { snippet: string; language: string }>();
-    if (supabase && attemptsMap.size > 0) {
+    if (attemptsMap.size > 0) {
       try {
+        const pool = getPgPool();
         const attemptIds = Array.from(attemptsMap.keys());
-        const { data: codeAnswers } = await supabase
-          .from('attempt_answers')
-          .select('attempt_id, code_snippet, code_language')
-          .in('attempt_id', attemptIds)
-          .not('code_snippet', 'is', null);
-
+        const { rows: codeAnswers } = await pool.query(
+          'SELECT attempt_id, code_snippet, code_language FROM attempt_answers WHERE attempt_id = ANY($1) AND code_snippet IS NOT NULL',
+          [attemptIds]
+        );
         if (codeAnswers) {
           for (const ans of codeAnswers) {
             if (ans.code_snippet && !codeSnippetMap.has(ans.attempt_id)) {
@@ -2937,20 +2941,22 @@ export const db = {
 
   // ON-DEMAND DETAILED CANDIDATE DOSSIER (MULTI-ROUND QUESTION & CODE BREAKDOWN)
   async getStudentDetailedRecord(examId: string, registrationId: string) {
-    const supabase = createAdminClient();
     const registrations = await this.getRegistrationsByExamId(examId);
     let reg = registrations.find(
       (r) => r.id === registrationId || r.student_id === registrationId || r.login_id === registrationId
     ) || store.registrations.get(registrationId);
 
-    if (!reg && supabase) {
+    if (!reg) {
       try {
-        const { data } = await supabase
-          .from('registrations')
-          .select('*, student:students(*)')
-          .or(`id.eq.${registrationId},student_id.eq.${registrationId},login_id.eq.${registrationId}`)
-          .maybeSingle();
-        if (data) reg = data as any;
+        const pool = getPgPool();
+        const { rows } = await pool.query(
+          `SELECT r.*, row_to_json(s.*) as student 
+           FROM registrations r 
+           LEFT JOIN students s ON s.id = r.student_id 
+           WHERE r.id = $1 OR r.student_id = $1 OR r.login_id = $1 LIMIT 1`,
+          [registrationId]
+        );
+        if (rows.length > 0) reg = rows[0] as any;
       } catch {}
     }
     if (!reg) throw new Error('Registration record not found');
@@ -2960,50 +2966,89 @@ export const db = {
     rounds.sort((a, b) => a.round_number - b.round_number);
     const roundProgression: any[] = [];
 
-    // Fetch attempts for this registration from Supabase
+    // Fetch attempts for this registration from PostgreSQL & Memory
     let regAttempts: ExaminationAttempt[] = [];
-    if (supabase) {
-      try {
-        const { data: attData } = await supabase
-          .from('examination_attempts')
-          .select('*')
-          .eq('registration_id', reg.id);
-        if (attData) regAttempts = attData as any;
-      } catch {}
-    }
     for (const a of store.attempts.values()) {
       if (a.registration_id === reg.id && !regAttempts.some((ra) => ra.id === a.id)) {
         regAttempts.push(a);
       }
     }
 
-    // Fetch results for this registration from Supabase
+    try {
+      const pool = getPgPool();
+      const { rows: pgAtts } = await pool.query(
+        'SELECT * FROM examination_attempts WHERE registration_id = $1',
+        [reg.id]
+      );
+      for (const a of pgAtts) {
+        if (!regAttempts.some((ra) => ra.id === a.id)) {
+          regAttempts.push({
+            id: a.id,
+            registration_id: a.registration_id,
+            round_id: a.round_id,
+            started_at: a.started_at,
+            deadline_at: a.deadline_at,
+            submitted_at: a.submitted_at,
+            status: a.status as any,
+            assigned_question_ids: Array.isArray(a.assigned_question_ids) ? a.assigned_question_ids : [],
+            cheating_warnings: a.cheating_warnings || 0,
+            ip_address: a.ip_address,
+            user_agent: a.user_agent,
+            created_at: a.created_at,
+          });
+        }
+      }
+    } catch {}
+
+    // Fetch results for this registration from PostgreSQL & Memory
     let regResults: ExaminationResult[] = [];
-    if (supabase) {
-      try {
-        const { data: resData } = await supabase
-          .from('examination_results')
-          .select('*')
-          .eq('registration_id', reg.id);
-        if (resData) regResults = resData as any;
-      } catch {}
-    }
     for (const res of store.results.values()) {
       if (res.registration_id === reg.id && !regResults.some((rr) => rr.id === res.id)) {
         regResults.push(res);
       }
     }
 
-    // Fetch all answers for these attempts from Supabase
+    try {
+      const pool = getPgPool();
+      const { rows: pgRes } = await pool.query(
+        'SELECT * FROM examination_results WHERE registration_id = $1',
+        [reg.id]
+      );
+      for (const r of pgRes) {
+        if (!regResults.some((rr) => rr.id === r.id)) {
+          regResults.push({
+            id: r.id,
+            attempt_id: r.attempt_id,
+            registration_id: r.registration_id,
+            round_id: r.round_id,
+            score: Number(r.score || 0),
+            total_marks: Number(r.total_marks || 0),
+            qualifying_marks: Number(r.qualifying_marks || 0),
+            is_qualified: r.is_qualified,
+            correct_count: r.correct_count,
+            wrong_count: r.wrong_count,
+            unanswered_count: r.unanswered_count,
+            evaluated_at: r.evaluated_at,
+          });
+        }
+      }
+    } catch {}
+
+    // Fetch all answers for these attempts from PostgreSQL & Memory
     const allAttemptIds = regAttempts.map((a) => a.id);
     let regAnswers: any[] = [];
-    if (supabase && allAttemptIds.length > 0) {
+    if (allAttemptIds.length > 0) {
       try {
-        const { data: ansData } = await supabase
-          .from('attempt_answers')
-          .select('*')
-          .in('attempt_id', allAttemptIds);
-        if (ansData) regAnswers = ansData;
+        const pool = getPgPool();
+        const { rows: pgAns } = await pool.query(
+          'SELECT * FROM attempt_answers WHERE attempt_id = ANY($1)',
+          [allAttemptIds]
+        );
+        for (const ans of pgAns) {
+          if (!regAnswers.some((ra) => ra.attempt_id === ans.attempt_id && ra.question_id === ans.question_id)) {
+            regAnswers.push(ans);
+          }
+        }
       } catch {}
     }
 
@@ -3020,9 +3065,14 @@ export const db = {
       let correctCount = 0;
       let wrongCount = 0;
 
-      if (attempt && Array.isArray(attempt.assigned_question_ids) && attempt.assigned_question_ids.length > 0) {
-        for (let i = 0; i < attempt.assigned_question_ids.length; i++) {
-          const qId = attempt.assigned_question_ids[i];
+      const targetQuestionIds =
+        attempt && Array.isArray(attempt.assigned_question_ids) && attempt.assigned_question_ids.length > 0
+          ? attempt.assigned_question_ids
+          : roundQuestions.map((rq) => rq.id);
+
+      if (attempt && targetQuestionIds.length > 0) {
+        for (let i = 0; i < targetQuestionIds.length; i++) {
+          const qId = targetQuestionIds[i];
           const q = store.questions.get(qId) || roundQuestions.find((rq) => rq.id === qId);
           const ansKey = store.answerKeys.get(qId);
           const answer = regAnswers.find((a) => a.attempt_id === attempt.id && a.question_id === qId) || store.answers.get(`${attempt.id}_${qId}`);
@@ -3129,6 +3179,34 @@ export const db = {
     };
   },
 
+  // HR / ADMIN RESET STUDENT INFRACTION WARNINGS
+  async resetStudentWarnings(registrationId: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const pool = getPgPool();
+      await pool.query(
+        `UPDATE student_attempts
+         SET cheating_warnings = 0
+         WHERE registration_id = $1`,
+        [registrationId]
+      );
+    } catch (err) {
+      console.warn('[resetStudentWarnings] PostgreSQL update error:', err);
+    }
+
+    for (const [id, att] of store.attempts.entries()) {
+      if (att.registration_id === registrationId) {
+        att.cheating_warnings = 0;
+        if (att.status === 'terminated') {
+          att.status = 'in_progress';
+        }
+        store.attempts.set(id, att);
+      }
+    }
+
+    resilientStorage.scheduleSave(() => store.toSnapshot());
+    return { success: true, message: 'Student warnings cleanly reset.' };
+  },
+
   // HR / ADMIN RECONDUCT ROUND ATTEMPT (E.G. ROUND 3 SIMULATOR RETAKE)
   async reconductRoundAttempt(registrationId: string, roundId: string): Promise<{ success: boolean; message: string }> {
     let reg = store.registrations.get(registrationId);
@@ -3137,15 +3215,17 @@ export const db = {
         (r) => r.id === registrationId || r.student_id === registrationId || r.login_id === registrationId
       );
     }
-    const supabase = createAdminClient();
-    if (!reg && supabase) {
+    if (!reg) {
       try {
-        const { data } = await supabase
-          .from('registrations')
-          .select('*, student:students(*)')
-          .or(`id.eq.${registrationId},student_id.eq.${registrationId},login_id.eq.${registrationId}`)
-          .maybeSingle();
-        if (data) reg = data as any;
+        const pool = getPgPool();
+        const { rows } = await pool.query(
+          `SELECT r.*, row_to_json(s.*) as student 
+           FROM registrations r 
+           LEFT JOIN students s ON s.id = r.student_id 
+           WHERE r.id = $1 OR r.student_id = $1 OR r.login_id = $1 LIMIT 1`,
+          [registrationId]
+        );
+        if (rows.length > 0) reg = rows[0] as any;
       } catch {}
     }
     if (!reg) throw new Error('Registration not found');
@@ -3153,17 +3233,14 @@ export const db = {
     let attempt = Array.from(store.attempts.values()).find(
       (a) => a.registration_id === reg!.id && a.round_id === roundId
     );
-    if (!attempt && supabase) {
+    if (!attempt) {
       try {
-        const { data: attData } = await supabase
-          .from('examination_attempts')
-          .select('*')
-          .eq('registration_id', reg.id)
-          .eq('round_id', roundId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (attData) attempt = attData as any;
+        const pool = getPgPool();
+        const { rows: attData } = await pool.query(
+          'SELECT * FROM examination_attempts WHERE registration_id = $1 AND round_id = $2 ORDER BY created_at DESC LIMIT 1',
+          [reg.id, roundId]
+        );
+        if (attData.length > 0) attempt = attData[0] as any;
       } catch {}
     }
 
@@ -3180,15 +3257,14 @@ export const db = {
     const regRoundKey = `${reg.id}_${roundId}`;
     if (store.attemptByRegAndRound) store.attemptByRegAndRound.delete(regRoundKey);
 
-    if (supabase) {
-      try {
-        // delete child answers first to avoid FK violation
-        await supabase.from('attempt_answers').delete().eq('attempt_id', oldAttemptId);
-        await supabase.from('examination_results').delete().eq('attempt_id', oldAttemptId);
-        await supabase.from('examination_attempts').delete().eq('id', oldAttemptId);
-      } catch (err) {
-        console.warn('[reconductRoundAttempt] Supabase delete error:', err);
-      }
+    try {
+      const pool = getPgPool();
+      await pool.query('DELETE FROM attempt_answers WHERE attempt_id = $1', [oldAttemptId]);
+      await pool.query('DELETE FROM examination_results WHERE attempt_id = $1', [oldAttemptId]);
+      await pool.query('DELETE FROM examination_attempts WHERE id = $1', [oldAttemptId]);
+      await pool.query('UPDATE registrations SET status = $1 WHERE id = $2', ['registered', reg.id]);
+    } catch (err) {
+      console.warn('[reconductRoundAttempt] PostgreSQL delete error:', err);
     }
 
     // 2. Clear stored answers for this attempt in memory
@@ -3205,11 +3281,6 @@ export const db = {
     // 4. Update registration status back to 'registered'
     reg.status = 'registered';
     store.registrations.set(reg.id, reg);
-    if (supabase) {
-      try {
-        await supabase.from('registrations').update({ status: 'registered' }).eq('id', reg.id);
-      } catch {}
-    }
 
     // 5. Persist to WAL and schedule snapshot
     resilientStorage.scheduleSave(() => store.toSnapshot());
@@ -3421,28 +3492,24 @@ export const db = {
     file_size_bytes: number;
     questions_count: number;
   } | null> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data } = await supabase
-          .from('pdf_documents')
-          .select('*')
-          .eq('round_id', roundId)
-          .order('uploaded_at', { ascending: false })
-          .limit(1);
-        if (data && data.length > 0) {
-          const doc = data[0];
-          const pool = await this.getQuestionsByRoundId(roundId);
-          return {
-            id: doc.id,
-            original_filename: doc.original_filename,
-            uploaded_at: doc.uploaded_at,
-            file_size_bytes: doc.file_size_bytes || 0,
-            questions_count: pool.length,
-          };
-        }
-      } catch {}
-    }
+    try {
+      const pool = getPgPool();
+      const { rows } = await pool.query(
+        'SELECT * FROM pdf_documents WHERE round_id = $1 ORDER BY uploaded_at DESC LIMIT 1',
+        [roundId]
+      );
+      if (rows && rows.length > 0) {
+        const doc = rows[0];
+        const poolQuestions = await this.getQuestionsByRoundId(roundId);
+        return {
+          id: doc.id,
+          original_filename: doc.original_filename,
+          uploaded_at: doc.uploaded_at,
+          file_size_bytes: doc.file_size_bytes || 0,
+          questions_count: poolQuestions.length,
+        };
+      }
+    } catch {}
 
     // Fall back to ocrJobs
     const jobs = Array.from(store.ocrJobs.values()).filter(
@@ -3464,23 +3531,21 @@ export const db = {
 
   // OCR JOBS
   async getOCRJobs(): Promise<OCRJob[]> {
-    const supabase = createAdminClient();
-    if (supabase) {
-      try {
-        const { data } = await supabase.from('ocr_jobs').select('*').order('created_at', { ascending: false });
-        if (data && data.length > 0) {
-          data.forEach((j: any) => {
-            const existing = store.ocrJobs.get(j.id);
-            store.ocrJobs.set(j.id, {
-              ...j,
-              document_name: existing?.document_name || j.document_name || 'Question_Paper.pdf',
-              round_name: existing?.round_name || j.round_name || 'Round 1 Question Pool',
-              pdf_document_id: j.pdf_document_id || j.id,
-            });
+    try {
+      const pool = getPgPool();
+      const { rows } = await pool.query('SELECT * FROM ocr_jobs ORDER BY created_at DESC');
+      if (rows && rows.length > 0) {
+        rows.forEach((j: any) => {
+          const existing = store.ocrJobs.get(j.id);
+          store.ocrJobs.set(j.id, {
+            ...j,
+            document_name: existing?.document_name || j.document_name || 'Question_Paper.pdf',
+            round_name: existing?.round_name || j.round_name || 'Round 1 Question Pool',
+            pdf_document_id: j.pdf_document_id || j.id,
           });
-        }
-      } catch {}
-    }
+        });
+      }
+    } catch {}
     return Array.from(store.ocrJobs.values()).sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
@@ -3599,32 +3664,24 @@ export const db = {
       if (params.roundId) {
         await this.syncRoundQuestionsToSupabase(params.roundId);
       }
-      const supabase = createAdminClient();
-      if (supabase) {
-        try {
-          if (params.roundId) {
-            await supabase.from('pdf_documents').upsert({
-              id: job.pdf_document_id,
-              round_id: params.roundId,
-              storage_path: `documents/${params.documentName}`,
-              original_filename: params.documentName,
-              file_size_bytes: params.fileBuffer?.length || 0,
-              uploaded_at: new Date().toISOString(),
-            });
-          }
-          await supabase.from('ocr_jobs').upsert({
-            id: job.id,
-            pdf_document_id: job.pdf_document_id,
-            status: job.status,
-            progress_percent: job.progress_percent,
-            questions_extracted: job.questions_extracted,
-            worker_id: job.worker_id,
-            completed_at: job.completed_at,
-            created_at: job.created_at,
-          });
-        } catch (err) {
-          console.warn('[Supabase pdf_documents/ocr_jobs upsert error]', err);
+      try {
+        const pgPool = getPgPool();
+        if (params.roundId) {
+          await pgPool.query(
+            `INSERT INTO pdf_documents (id, round_id, storage_path, original_filename, file_size_bytes, uploaded_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (id) DO UPDATE SET original_filename = EXCLUDED.original_filename, file_size_bytes = EXCLUDED.file_size_bytes, uploaded_at = EXCLUDED.uploaded_at`,
+            [job.pdf_document_id, params.roundId, `documents/${params.documentName}`, params.documentName, params.fileBuffer?.length || 0, new Date().toISOString()]
+          );
         }
+        await pgPool.query(
+          `INSERT INTO ocr_jobs (id, pdf_document_id, status, progress_percent, questions_extracted, worker_id, completed_at, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, progress_percent = EXCLUDED.progress_percent, questions_extracted = EXCLUDED.questions_extracted, completed_at = EXCLUDED.completed_at`,
+          [job.id, job.pdf_document_id, job.status, job.progress_percent, job.questions_extracted, job.worker_id, job.completed_at, job.created_at]
+        );
+      } catch (err) {
+        console.warn('[PostgreSQL pdf_documents/ocr_jobs upsert error]', err);
       }
     }
 
