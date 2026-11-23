@@ -60,23 +60,25 @@ export function Dialog({
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
             className={cn(
-              'relative z-10 w-full overflow-hidden rounded-xl border border-gray-200 bg-white p-6 shadow-xl',
+              'relative z-10 w-full max-h-[90vh] flex flex-col rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 sm:p-6 shadow-xl',
               maxW
             )}
           >
             {(title || description) && (
-              <div className="mb-4 pr-8">
-                {title && <h3 className="text-base font-semibold text-gray-900">{title}</h3>}
-                {description && <p className="mt-1 text-sm text-gray-500">{description}</p>}
+              <div className="mb-4 pr-8 shrink-0">
+                {title && <h3 className="text-base font-semibold text-gray-900 dark:text-zinc-100">{title}</h3>}
+                {description && <p className="mt-1 text-sm text-gray-500 dark:text-zinc-400">{description}</p>}
               </div>
             )}
             <button
               onClick={onClose}
-              className="absolute top-4 right-4 rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              className="absolute top-4 right-4 rounded-md p-1.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-700 dark:hover:text-zinc-200 transition-colors z-20 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
-            {children}
+            <div className="overflow-y-auto flex-1 min-h-0 pr-1">
+              {children}
+            </div>
           </motion.div>
         </div>
       )}

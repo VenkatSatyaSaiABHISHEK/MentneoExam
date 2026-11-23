@@ -131,7 +131,7 @@ export function AdminPinGate({ onAuthenticated }: { onAuthenticated: () => void 
           )}
 
           {/* 8-Digit Input Boxes */}
-          <div className="flex items-center justify-center gap-1.5 sm:gap-2 on-paste" onPaste={handlePaste}>
+          <div className="flex items-center justify-center gap-1 min-[370px]:gap-1.5 sm:gap-2 on-paste px-1" onPaste={handlePaste}>
             {pinDigits.map((digit, idx) => (
               <input
                 key={idx}
@@ -144,7 +144,7 @@ export function AdminPinGate({ onAuthenticated }: { onAuthenticated: () => void 
                 value={digit}
                 onChange={(e) => handleDigitChange(idx, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(idx, e)}
-                className={`w-9 h-12 sm:w-10 sm:h-12 text-center text-lg font-bold font-mono rounded-lg border transition-all focus:outline-hidden ${
+                className={`w-7 h-10 min-[370px]:w-8 min-[370px]:h-11 sm:w-10 sm:h-12 text-center text-base sm:text-lg font-bold font-mono rounded-lg border transition-all focus:outline-hidden ${
                   digit
                     ? 'border-gray-900 bg-white text-gray-900 ring-1 ring-gray-900'
                     : 'border-gray-300 bg-gray-50/50 text-gray-900 focus:border-gray-900 focus:bg-white focus:ring-1 focus:ring-gray-900'

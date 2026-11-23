@@ -46,38 +46,38 @@ async function AdminDashboardContent() {
       </div>
 
       {/* Dashboard Statistics Metric Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3.5">
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3.5">
+        <div className="p-3 sm:p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
           <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-zinc-400 dark:text-zinc-500 block">Total Exams</span>
-          <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.totalExaminations}</span>
+          <span className="text-xl sm:text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.totalExaminations}</span>
         </div>
 
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+        <div className="p-3 sm:p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
           <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-zinc-400 dark:text-zinc-500 block">Candidates</span>
-          <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.totalStudents}</span>
+          <span className="text-xl sm:text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.totalStudents}</span>
         </div>
 
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+        <div className="p-3 sm:p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
           <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-emerald-600 dark:text-emerald-400 block">Writing Exam</span>
-          <span className="text-2xl font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-1 block flex items-center gap-2">
+          <span className="text-xl sm:text-2xl font-bold font-mono text-emerald-700 dark:text-emerald-400 mt-1 block flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             {stats.studentsWriting}
           </span>
         </div>
 
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+        <div className="p-3 sm:p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
           <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-zinc-400 dark:text-zinc-500 block">Submissions</span>
-          <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.totalSubmissions}</span>
+          <span className="text-xl sm:text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.totalSubmissions}</span>
         </div>
 
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+        <div className="p-3 sm:p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
           <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-zinc-400 dark:text-zinc-500 block">Qualified</span>
-          <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.qualifiedStudents}</span>
+          <span className="text-xl sm:text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.qualifiedStudents}</span>
         </div>
 
-        <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+        <div className="p-3 sm:p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
           <span className="text-[10px] font-mono uppercase tracking-wider font-semibold text-zinc-400 dark:text-zinc-500 block">OCR Queue</span>
-          <span className="text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.pendingOcrJobs}</span>
+          <span className="text-xl sm:text-2xl font-bold font-mono text-zinc-900 dark:text-zinc-100 mt-1 block">{stats.pendingOcrJobs}</span>
         </div>
       </div>
 
@@ -176,7 +176,7 @@ async function AdminDashboardContent() {
                     </div>
                   </div>
 
-                  <div className="p-4 border-t border-zinc-100 dark:border-zinc-800 mt-auto flex items-center justify-between gap-3">
+                  <div className="p-4 border-t border-zinc-100 dark:border-zinc-800 mt-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <Link
                       href={`/exam/${exam.slug}`}
                       target="_blank"
@@ -186,15 +186,15 @@ async function AdminDashboardContent() {
                       <ExternalLink className="w-3 h-3 text-zinc-400" />
                     </Link>
 
-                    <div className="flex items-center gap-2">
-                      <Link href={`/exam/admin/examinations/${exam.id}/results`}>
-                        <Button variant="outline" size="sm" className="text-xs uppercase tracking-wider font-semibold gap-1.5">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <Link href={`/exam/admin/examinations/${exam.id}/results`} className="flex-1 sm:flex-initial">
+                        <Button variant="outline" size="sm" className="w-full sm:w-auto text-xs uppercase tracking-wider font-semibold gap-1.5">
                           <Activity className="w-3.5 h-3.5" />
                           <span>Live Monitor</span>
                         </Button>
                       </Link>
-                      <Link href={`/exam/admin/examinations/${exam.id}`}>
-                        <Button size="sm" className="text-xs uppercase tracking-wider font-semibold gap-1.5">
+                      <Link href={`/exam/admin/examinations/${exam.id}`} className="flex-1 sm:flex-initial">
+                        <Button size="sm" className="w-full sm:w-auto text-xs uppercase tracking-wider font-semibold gap-1.5">
                           <span>Manage</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </Button>
