@@ -8,6 +8,22 @@ export interface ParsedQuestionItem {
   difficulty?: Difficulty;
 }
 
+function decompressBuffer(rawStream: Buffer): string {
+  try {
+    return zlib.inflateSync(rawStream).toString('utf-8');
+  } catch {
+    try {
+      return zlib.inflateRawSync(rawStream).toString('utf-8');
+    } catch {
+      try {
+        return zlib.unzipSync(rawStream).toString('utf-8');
+      } catch {
+        return rawStream.toString('utf-8');
+      }
+    }
+  }
+}
+
 /**
  * Extracts raw text from standard PDF streams using built-in zlib inflate.
  * Works across all Node.js environments and Vercel serverless without native binaries.
@@ -19,13 +35,13 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
 
   // 1. First pass: find and parse all CMap ToUnicode streams for Chromium/Skia PDFs
   const cmap = new Map<string, string>();
-  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+  const streamRegex = /(?:stream\r?\n|stream\n|stream\r)([\s\S]*?)(?:\r?\nendstream|\nendstream|\rendstream|endstream)/g;
   let match: RegExpExecArray | null;
 
   while ((match = streamRegex.exec(content)) !== null) {
     try {
       const rawStream = Buffer.from(match[1], 'binary');
-      const dec = zlib.inflateSync(rawStream).toString('utf-8');
+      const dec = decompressBuffer(rawStream);
       if (dec.includes('beginbfchar') || dec.includes('beginbfrange')) {
         const bfcharRegex = /<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/g;
         let bfc: RegExpExecArray | null;
@@ -55,31 +71,25 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
   while ((match = streamRegex.exec(content)) !== null) {
     const rawStream = Buffer.from(match[1], 'binary');
     try {
-      let decStr = '';
-      try {
-        decStr = zlib.inflateSync(rawStream).toString('utf-8');
-      } catch {
-        // Try raw utf-8 string if not flate compressed
-        decStr = rawStream.toString('utf-8');
-      }
+      const decStr = decompressBuffer(rawStream);
 
       // Convert PDF newline operators (T*, TD, Td with negative y, ET) to actual newlines
       const normalizedStream = decStr
         .replace(/(?:T\*|\bET\b|(?:\-?\d+(?:\.\d+)?\s+\-\d+(?:\.\d+)?\s+T[Dd]))/g, '\n');
 
       // Extract text from (text) Tj operators
-      const tjRegex = /\(([^)]+)\)\s*T[jJ]/g;
+      const tjRegex = /\(([\s\S]*?)\)\s*T[jJ]/g;
       let tj: RegExpExecArray | null;
       while ((tj = tjRegex.exec(normalizedStream)) !== null) {
         fullText += tj[1] + ' ';
       }
 
-      // Extract text from [(text1) 20 (text2)] TJ array operators
-      const tjArrayRegex = /\[(.*?)\]\s*TJ/g;
+      // Extract text from [(text1) 20 (text2)] TJ array operators (multi-line supported)
+      const tjArrayRegex = /\[([\s\S]*?)\]\s*TJ/gi;
       let tjArr: RegExpExecArray | null;
       while ((tjArr = tjArrayRegex.exec(normalizedStream)) !== null) {
         const inner = tjArr[1];
-        const innerTextRegex = /\(([^)]+)\)/g;
+        const innerTextRegex = /\(([\s\S]*?)\)/g;
         let it: RegExpExecArray | null;
         while ((it = innerTextRegex.exec(inner)) !== null) {
           fullText += it[1];
@@ -88,7 +98,7 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
       }
 
       // Extract text from ' (text)' line-feed operators
-      const singleQuoteRegex = /\(([^)]+)\)\s*'/g;
+      const singleQuoteRegex = /\(([\s\S]*?)\)\s*'/g;
       let sq: RegExpExecArray | null;
       while ((sq = singleQuoteRegex.exec(normalizedStream)) !== null) {
         fullText += '\n' + sq[1] + ' ';
@@ -115,7 +125,7 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
   }
 
   // 3. Search uncompressed literal text as fallback
-  const literalTj = /\(([^)]+)\)\s*T[jJ]/g;
+  const literalTj = /\(([\s\S]*?)\)\s*T[jJ]/g;
   let lit: RegExpExecArray | null;
   while ((lit = literalTj.exec(content)) !== null) {
     fullText += lit[1] + ' ';
@@ -179,8 +189,8 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
     const content = part.content;
     if (content.length < 5) continue;
 
-    // Check if this block contains options (A) (B) (C) (D) or A. B. C. D. or A) B) C) D)
-    const optSplitRegex = /(?:\r?\n|\s{2,}|\t)\s*(?:\(?([A-D])[\)\.\:\-]|\[([A-D])\])\s+/gi;
+    // Check if this block contains options (A) (B) (C) (D) or (a) (b) (c) (d) or A. B. C. D. or A) B) C) D)
+    const optSplitRegex = /(?:\r?\n|\s{2,}|\t|^)\s*(?:\(?([a-dA-D])[\)\.\:\-]|\[([a-dA-D])\])\s+/gi;
     const optMatches = Array.from(content.matchAll(optSplitRegex));
 
     let questionStatement = '';
@@ -199,11 +209,11 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
         const endIndex = m + 1 < optMatches.length ? (optMatches[m + 1].index ?? content.length) : content.length;
         let optText = content.slice(startIndex, endIndex).trim();
 
-        // Extract inline answer if attached to an option (e.g. "40 km/h Answer: B")
-        const inlineAnsMatch = optText.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i);
+        // Extract inline answer if attached to an option (e.g. "14 Answer: (b) 10" or "40 km/h Answer: B")
+        const inlineAnsMatch = optText.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?([a-dA-D])\)?/i);
         if (inlineAnsMatch) {
           inlineAnswer = inlineAnsMatch[1].toUpperCase();
-          optText = optText.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/i, '').trim();
+          optText = optText.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?[a-dA-D]\)?.*$/im, '').trim();
         }
 
         optionMap[label] = optText;
@@ -214,14 +224,14 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
       const nonOptLines: string[] = [];
 
       for (const line of lines) {
-        const singleOptMatch = line.match(/^[\(\[]?([A-D])[\)\]\.\:\-]\s+(.*)$/i);
+        const singleOptMatch = line.match(/^[\(\[]?([a-dA-D])[\)\]\.\:\-]\s+(.*)$/i);
         if (singleOptMatch) {
           const l = singleOptMatch[1].toUpperCase();
           let optVal = singleOptMatch[2].trim();
-          const ansMatch = optVal.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i);
+          const ansMatch = optVal.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?([a-dA-D])\)?/i);
           if (ansMatch) {
             inlineAnswer = ansMatch[1].toUpperCase();
-            optVal = optVal.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/i, '').trim();
+            optVal = optVal.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?[a-dA-D]\)?.*$/im, '').trim();
           }
           optionMap[l] = optVal;
         } else {
@@ -238,12 +248,12 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
     const finalAnswer =
       answerKeyMap.get(part.num) ||
       inlineAnswer ||
-      (content.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i)?.[1]?.toUpperCase()) ||
+      (content.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?([a-dA-D])\)?/i)?.[1]?.toUpperCase()) ||
       'A';
 
     // Clean question statement
     const cleanedQ = questionStatement
-      .replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/gi, '')
+      .replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?[a-dA-D]\)?.*$/gim, '')
       .replace(/\s+/g, ' ')
       .trim();
 
@@ -270,24 +280,22 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
  * Used for Basic Aptitude and Reasoning assessment papers.
  */
 export const APTITUDE_REASONING_BANK: ParsedQuestionItem[] = [
-  // 1-10: Time, Speed & Distance
-  { question_text: "A train running at the speed of 60 km/hr crosses a pole in 9 seconds. What is the length of the train?", options: ["120 metres", "180 metres", "324 metres", "150 metres"], correct_answer: "D", difficulty: "easy" },
-  { question_text: "A person crosses a 600 m long street in 5 minutes. What is his speed in km per hour?", options: ["3.6 km/hr", "7.2 km/hr", "8.4 km/hr", "10 km/hr"], correct_answer: "B", difficulty: "easy" },
-  { question_text: "An aeroplane covers a certain distance at a speed of 240 kmph in 5 hours. To cover the same distance in 1 and 2/3 hours, it must travel at a speed of:", options: ["300 kmph", "360 kmph", "600 kmph", "720 kmph"], correct_answer: "D", difficulty: "medium" },
-  { question_text: "If a person walks at 14 km/hr instead of 10 km/hr, he would have walked 20 km more. The actual distance travelled by him is:", options: ["50 km", "56 km", "70 km", "80 km"], correct_answer: "A", difficulty: "medium" },
-  { question_text: "A car covers four successive 3 km stretches at speeds of 10, 20, 30 and 60 km/hr respectively. Its average speed over this distance is:", options: ["20 km/hr", "22.5 km/hr", "25 km/hr", "30 km/hr"], correct_answer: "A", difficulty: "medium" },
-  { question_text: "A train passes a station platform in 36 seconds and a man standing on the platform in 20 seconds. If the speed of the train is 54 km/hr, what is the length of the platform?", options: ["120 m", "240 m", "300 m", "200 m"], correct_answer: "B", difficulty: "medium" },
-  { question_text: "Two trains running in opposite directions cross a man standing on the platform in 27 seconds and 17 seconds respectively and they cross each other in 23 seconds. The ratio of their speeds is:", options: ["1:3", "3:2", "3:4", "2:3"], correct_answer: "B", difficulty: "hard" },
-  { question_text: "A boat can travel with a speed of 13 km/hr in still water. If the speed of the stream is 4 km/hr, find the time taken by the boat to go 68 km downstream.", options: ["2 hours", "3 hours", "4 hours", "5 hours"], correct_answer: "C", difficulty: "easy" },
-  { question_text: "A boat running downstream covers a distance of 16 km in 2 hours while for covering the same distance upstream, it takes 4 hours. What is the speed of the boat in still water?", options: ["4 km/hr", "6 km/hr", "8 km/hr", "10 km/hr"], correct_answer: "B", difficulty: "medium" },
-  { question_text: "In a 100 m race, A beats B by 10 m and C by 13 m. In a race of 180 m, B will beat C by:", options: ["5.4 m", "4.5 m", "5 m", "6 m"], correct_answer: "D", difficulty: "hard" },
-
-  // 11-20: Time & Work, Pipes & Cisterns
-  { question_text: "A can do a work in 15 days and B in 20 days. If they work on it together for 4 days, then the fraction of the work that is left is:", options: ["7/15", "8/15", "1/10", "1/4"], correct_answer: "B", difficulty: "easy" },
-  { question_text: "A and B can together finish a work in 30 days. They worked together for 20 days and then B left. After another 20 days, A finished the remaining work. In how many days can A alone finish the work?", options: ["40 days", "50 days", "54 days", "60 days"], correct_answer: "D", difficulty: "medium" },
-  { question_text: "A is thrice as good a workman as B and therefore is able to finish a job in 60 days less than B. Working together, they can do it in:", options: ["20 days", "22.5 days", "25 days", "30 days"], correct_answer: "B", difficulty: "medium" },
-  { question_text: "Three pipes A, B and C can fill a tank from empty to full in 30 minutes, 20 minutes, and 10 minutes respectively. When the tank is empty, all the three pipes are opened. How long will it take to fill the tank?", options: ["5.45 minutes", "6 minutes", "7.5 minutes", "8 minutes"], correct_answer: "A", difficulty: "medium" },
-  { question_text: "Two pipes A and B can fill a cistern in 37.5 minutes and 45 minutes respectively. Both pipes are opened. The cistern will be filled in just half an hour, if pipe B is turned off after:", options: ["5 min", "9 min", "10 min", "15 min"], correct_answer: "B", difficulty: "hard" },
+  // 1-15: Section A - Number and Letter Series (from 100 Basic Aptitude Reasoning Paper)
+  { question_text: "2, 4, 6, 8, ?", options: ["9", "10", "12", "14"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "3, 6, 12, 24, ?", options: ["36", "48", "42", "60"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "1, 4, 9, 16, ?", options: ["20", "25", "24", "36"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "5, 10, 20, 40, ?", options: ["60", "70", "80", "100"], correct_answer: "C", difficulty: "easy" },
+  { question_text: "100, 90, 80, 70, ?", options: ["50", "60", "65", "40"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "1, 1, 2, 3, 5, 8, ?", options: ["11", "12", "13", "15"], correct_answer: "C", difficulty: "easy" },
+  { question_text: "2, 3, 5, 7, 11, ?", options: ["12", "13", "14", "15"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "10, 100, 1000, ?", options: ["10000", "10001", "2000", "100000"], correct_answer: "A", difficulty: "easy" },
+  { question_text: "1, 8, 27, 64, ?", options: ["100", "125", "216", "81"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "80, 40, 20, 10, ?", options: ["5", "2", "1", "0"], correct_answer: "A", difficulty: "easy" },
+  { question_text: "7, 14, 28, 56, ?", options: ["100", "112", "120", "110"], correct_answer: "B", difficulty: "easy" },
+  { question_text: "12, 23, 34, 45, ?", options: ["54", "55", "56", "60"], correct_answer: "C", difficulty: "easy" },
+  { question_text: "4, 9, 19, 39, ?", options: ["69", "79", "89", "99"], correct_answer: "B", difficulty: "medium" },
+  { question_text: "100, 96, 92, 88, ?", options: ["84", "82", "80", "86"], correct_answer: "A", difficulty: "easy" },
+  { question_text: "0, 2, 6, 12, 20, ?", options: ["28", "30", "32", "36"], correct_answer: "B", difficulty: "medium" },
   { question_text: "A pump can fill a tank with water in 2 hours. Because of a leak, it took 2 and 1/3 hours to fill the tank. The leak can drain all the water of the tank in:", options: ["4.33 hours", "7 hours", "8 hours", "14 hours"], correct_answer: "D", difficulty: "medium" },
   { question_text: "4 men and 6 women can complete a work in 8 days, while 3 men and 7 women can complete it in 10 days. In how many days will 10 women complete it?", options: ["35 days", "40 days", "45 days", "50 days"], correct_answer: "B", difficulty: "hard" },
   { question_text: "A can finish a work in 18 days and B can do the same work in 15 days. B worked for 10 days and left the job. In how many days, A alone can finish the remaining work?", options: ["5 days", "5.5 days", "6 days", "8 days"], correct_answer: "C", difficulty: "easy" },

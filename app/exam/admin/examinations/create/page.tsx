@@ -49,7 +49,7 @@ export default function CreateExaminationPage() {
       marks_per_question: 1,
       negative_marks: 0.25,
       qualifying_marks: 8,
-      question_selection_strategy: 'sequential',
+      question_selection_strategy: 'random',
       auto_qualify: true,
       instructions: 'Preliminary screening round. Qualify to advance to Round 2.',
     },
@@ -61,7 +61,7 @@ export default function CreateExaminationPage() {
       marks_per_question: 2,
       negative_marks: 0.5,
       qualifying_marks: 20,
-      question_selection_strategy: 'sequential',
+      question_selection_strategy: 'random',
       auto_qualify: true,
       instructions: 'Comprehensive technical round for qualified candidates.',
     },
@@ -82,7 +82,7 @@ export default function CreateExaminationPage() {
       marks_per_question: 1,
       negative_marks: 0,
       qualifying_marks: 15,
-      question_selection_strategy: 'sequential',
+      question_selection_strategy: 'random',
       auto_qualify: true,
       instructions: `Round ${nextNumber} instructions for candidates.`,
     };
@@ -348,8 +348,8 @@ export default function CreateExaminationPage() {
                         }
                         className="flex h-10 w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm text-gray-900 focus:border-gray-900 focus:outline-hidden focus:ring-1 focus:ring-gray-900"
                       >
+                        <option value="random">Randomized Shuffle (Candidate receives unique random order)</option>
                         <option value="sequential">Sequential (Ordered by Sort Priority)</option>
-                        <option value="random">Randomized Shuffle</option>
                       </select>
                     </div>
                   </div>

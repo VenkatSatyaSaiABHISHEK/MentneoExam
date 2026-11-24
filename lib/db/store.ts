@@ -487,9 +487,10 @@ export const db = {
           const totalQ = Number(r.total_questions) || 30;
           const marksPerQ = Number(r.marks_per_question) || 1;
           const totalM = r.total_marks ? Number(r.total_marks) : totalQ * marksPerQ;
+          const strat = r.question_selection_strategy || 'random';
           await pool.query(`
-            INSERT INTO examination_rounds (id, examination_id, round_number, name, duration_minutes, total_questions, marks_per_question, negative_marks, qualifying_marks, total_marks, status, round_type, auto_qualify, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+            INSERT INTO examination_rounds (id, examination_id, round_number, name, duration_minutes, total_questions, marks_per_question, negative_marks, qualifying_marks, total_marks, status, round_type, auto_qualify, question_selection_strategy, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
             ON CONFLICT (id) DO UPDATE SET
               name = EXCLUDED.name,
               duration_minutes = EXCLUDED.duration_minutes,
@@ -501,6 +502,7 @@ export const db = {
               status = EXCLUDED.status,
               round_type = EXCLUDED.round_type,
               auto_qualify = EXCLUDED.auto_qualify,
+              question_selection_strategy = EXCLUDED.question_selection_strategy,
               updated_at = NOW()
           `, [
             rId,
@@ -516,6 +518,7 @@ export const db = {
             r.status || 'draft',
             r.round_type || 'mcq',
             r.auto_qualify ?? true,
+            strat,
           ]);
         }
       }
@@ -590,23 +593,77 @@ export const db = {
   async deleteExamination(examId: string): Promise<boolean> {
     try {
       const pool = getPgPool();
-      await pool.query('DELETE FROM attempt_answers WHERE attempt_id IN (SELECT id FROM examination_attempts WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1))', [examId]);
-      await pool.query('DELETE FROM examination_results WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)', [examId]);
-      await pool.query('DELETE FROM examination_attempts WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)', [examId]);
+      await pool.query('BEGIN');
+      await pool.query(
+        'DELETE FROM answer_keys WHERE question_id IN (SELECT id FROM questions WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1))',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM question_options WHERE question_id IN (SELECT id FROM questions WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1))',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM questions WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM attempt_answers WHERE attempt_id IN (SELECT id FROM examination_attempts WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1))',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM examination_results WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM round_qualifications WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM examination_attempts WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)',
+        [examId]
+      );
+      await pool.query(
+        'DELETE FROM pdf_documents WHERE round_id IN (SELECT id FROM examination_rounds WHERE examination_id = $1)',
+        [examId]
+      );
       await pool.query('DELETE FROM registrations WHERE examination_id = $1', [examId]);
       await pool.query('DELETE FROM examination_rounds WHERE examination_id = $1', [examId]);
       await pool.query('DELETE FROM examinations WHERE id = $1', [examId]);
+      await pool.query('COMMIT');
     } catch (err) {
       console.warn('[PostgreSQL deleteExamination error]', err);
+      try {
+        const pool = getPgPool();
+        await pool.query('ROLLBACK');
+      } catch {}
     }
 
-    store.examinations.delete(examId);
+    const roundIds = new Set<string>();
     for (const [rId, r] of store.rounds.entries()) {
-      if (r.examination_id === examId) store.rounds.delete(rId);
+      if (r.examination_id === examId) {
+        roundIds.add(rId);
+        store.rounds.delete(rId);
+      }
+    }
+    for (const [qId, q] of store.questions.entries()) {
+      if (q.round_id && roundIds.has(q.round_id)) {
+        store.questions.delete(qId);
+        store.answerKeys.delete(qId);
+      }
     }
     for (const [regId, reg] of store.registrations.entries()) {
-      if (reg.examination_id === examId) store.registrations.delete(regId);
+      if (reg.examination_id === examId) {
+        store.registrations.delete(regId);
+      }
     }
+    for (const [attId, att] of store.attempts.entries()) {
+      if (roundIds.has(att.round_id)) {
+        store.attempts.delete(attId);
+        store.results.delete(attId);
+      }
+    }
+    store.examinations.delete(examId);
+    store.rebuildIndexes();
     resilientStorage.flushSync(() => store.toSnapshot());
     return true;
   },
@@ -769,8 +826,8 @@ export const db = {
     try {
       const pool = getPgPool();
       await pool.query(`
-        INSERT INTO examination_rounds (id, examination_id, round_number, name, duration_minutes, total_questions, marks_per_question, negative_marks, qualifying_marks, total_marks, status, round_type, auto_qualify, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+        INSERT INTO examination_rounds (id, examination_id, round_number, name, duration_minutes, total_questions, marks_per_question, negative_marks, qualifying_marks, total_marks, status, round_type, auto_qualify, question_selection_strategy, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           duration_minutes = EXCLUDED.duration_minutes,
@@ -782,6 +839,7 @@ export const db = {
           status = EXCLUDED.status,
           round_type = EXCLUDED.round_type,
           auto_qualify = EXCLUDED.auto_qualify,
+          question_selection_strategy = EXCLUDED.question_selection_strategy,
           updated_at = NOW()
       `, [
         roundData.id,
@@ -797,6 +855,7 @@ export const db = {
         roundData.status,
         roundData.round_type,
         roundData.auto_qualify,
+        roundData.question_selection_strategy || 'random',
       ]);
     } catch (err) {
       console.warn('[PostgreSQL createOrUpdateRound error]', err);
