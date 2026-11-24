@@ -61,6 +61,8 @@ interface MonitoringRow {
   roundAttempts?: MonitoringRow[];
   totalCumulativeScore?: number;
   roundsAttemptedCount?: number;
+  roundScores?: Record<number, { score: number; total: number }>;
+  overallPercentage?: number;
 }
 
 interface RoundSummary {
@@ -230,11 +232,63 @@ function AdminLiveResultsContent() {
     if (activeTab === 'all') {
       list = [...rows];
     } else if (activeTab === 'rankings') {
+      // Final Merit Rankings:
+      // STRICT FILTER: Only candidates who qualified ALL examination rounds are ranked.
+      // Candidates who failed Round 1 or Round 2 or did not complete are excluded.
       const candidateMap = new Map<string, MonitoringRow>();
+      const maxConfiguredRoundNum = rounds.length > 0
+        ? Math.max(...rounds.map((r: any) => r.round_number || 1))
+        : 1;
+
+      // Group all attempts per student
+      const studentAttemptsMap = new Map<string, MonitoringRow[]>();
       for (const r of rows) {
-        const existing = candidateMap.get(r.loginId);
-        if (!existing || r.roundNumber > existing.roundNumber || (r.roundNumber === existing.roundNumber && (r.score ?? 0) > (existing.score ?? 0))) {
-          candidateMap.set(r.loginId, r);
+        const key = r.loginId || r.registrationId || r.studentName;
+        if (!studentAttemptsMap.has(key)) {
+          studentAttemptsMap.set(key, []);
+        }
+        studentAttemptsMap.get(key)!.push(r);
+      }
+
+      for (const [key, studentRows] of studentAttemptsMap.entries()) {
+        // Candidate must have passed every attempted round
+        const allAttemptsPassed = studentRows.every((att) => att.isQualified === true);
+        const highestRoundReached = Math.max(...studentRows.map((att) => att.roundNumber));
+
+        // Must have passed the final configured round of the exam (or highest round)
+        const passedFinalRound = studentRows.some(
+          (att) => att.roundNumber === maxConfiguredRoundNum && att.isQualified === true
+        );
+
+        // Strict criteria: Must have passed all rounds including the final round
+        if (allAttemptsPassed && (passedFinalRound || highestRoundReached >= maxConfiguredRoundNum)) {
+          const baseRow = studentRows[studentRows.length - 1];
+          const roundScores: Record<number, { score: number; total: number }> = {};
+          let totalCumScore = 0;
+          let totalCumMax = 0;
+          let totalWarnings = 0;
+
+          studentRows.forEach((att) => {
+            const sc = att.score ?? 0;
+            const tot = att.totalMarks || 30;
+            roundScores[att.roundNumber] = { score: sc, total: tot };
+            totalCumScore += sc;
+            totalCumMax += tot;
+            totalWarnings += att.cheatingWarnings || 0;
+          });
+
+          const overallPct = totalCumMax > 0 ? Math.round((totalCumScore / totalCumMax) * 100) : 0;
+
+          candidateMap.set(key, {
+            ...baseRow,
+            roundAttempts: studentRows,
+            totalCumulativeScore: totalCumScore,
+            totalMarks: totalCumMax,
+            roundScores,
+            overallPercentage: overallPct,
+            cheatingWarnings: totalWarnings,
+            isQualified: true,
+          });
         }
       }
       list = Array.from(candidateMap.values());
@@ -603,6 +657,31 @@ function AdminLiveResultsContent() {
           </button>
         </div>
 
+        {/* Top Confirmation Banner for Rankings & Round Stages */}
+        {activeTab === 'rankings' && (
+          <div className="p-4 rounded-xl border border-amber-300 bg-amber-50/70 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
+                <Trophy className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-gray-900 flex items-center gap-2">
+                  <span>Official Final Merit Rankings</span>
+                  <Badge variant="success" size="sm">Fully Qualified</Badge>
+                </h3>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Only candidates who successfully qualified all {rounds.length || 2} evaluation stages are ranked below. Candidates who failed Round 1 or Round 2 are strictly excluded.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0 font-mono text-xs">
+              <span className="font-bold text-amber-900 bg-white px-3 py-1 rounded-lg border border-amber-200">
+                {currentSummary.passed} Final Qualifiers
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Dynamic Funnel & Metric Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
           <div className="p-3 sm:p-4 rounded-xl border border-gray-200 bg-white">
@@ -738,23 +817,32 @@ function AdminLiveResultsContent() {
             <div className="p-8 text-center bg-white rounded-xl border border-gray-200 text-xs text-gray-500">
               No candidate records found matching current criteria.
             </div>
-          ) : activeTab === 'students' ? (
+          ) : activeTab === 'students' || activeTab === 'rankings' ? (
             filtered.map((r, index) => {
               const dept = r.attributes?.Department || r.attributes?.department || r.attributes?.Dept || 'General';
               const roundAttempts = r.roundAttempts || [r];
               const r3Round = rounds.find((rnd: any) => rnd.round_number === 3);
               const r3Attempt = roundAttempts.find((a) => a.roundNumber === 3);
+              const isTopRank = activeTab === 'rankings' && index < 3;
 
               return (
                 <div
                   key={`mob-cand-card-${r.loginId || index}`}
-                  className="p-4 rounded-xl border border-gray-200 bg-white shadow-xs space-y-3"
+                  className={`p-4 rounded-xl border bg-white shadow-xs space-y-3 ${
+                    isTopRank ? 'border-amber-300 ring-1 ring-amber-400/30 bg-amber-50/10' : 'border-gray-200'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-100 text-[11px] font-mono font-bold text-gray-700">
-                          {index + 1}
+                        <span
+                          className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-mono font-bold ${
+                            isTopRank
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                              : 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          #{index + 1}
                         </span>
                         <h4 className="font-bold text-sm text-gray-900">{r.studentName}</h4>
                       </div>
@@ -762,7 +850,12 @@ function AdminLiveResultsContent() {
                     </div>
 
                     <div>
-                      {r.isQualified === true ? (
+                      {activeTab === 'rankings' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
+                          <Trophy className="w-3 h-3 text-amber-600" />
+                          Rank #{index + 1}
+                        </span>
+                      ) : r.isQualified === true ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
                           <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                           Qualified
@@ -958,7 +1051,23 @@ function AdminLiveResultsContent() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-gray-50/80 border-b border-gray-200 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                {activeTab === 'students' ? (
+                {activeTab === 'rankings' ? (
+                  <tr>
+                    <th className="py-3.5 px-4 w-14 text-center">Merit Rank</th>
+                    <th className="py-3.5 px-6">Candidate</th>
+                    <th className="py-3.5 px-4">Login Identifier</th>
+                    <th className="py-3.5 px-4">Department</th>
+                    {rounds.map((rnd: any) => (
+                      <th key={`hdr-round-${rnd.id}`} className="py-3.5 px-4 text-center">
+                        Round {rnd.round_number} Score
+                      </th>
+                    ))}
+                    <th className="py-3.5 px-4 text-center">Total Score</th>
+                    <th className="py-3.5 px-4 text-center">Overall %</th>
+                    <th className="py-3.5 px-4 text-center">Merit Status</th>
+                    <th className="py-3.5 px-6 text-right">Actions</th>
+                  </tr>
+                ) : activeTab === 'students' ? (
                   <tr>
                     <th className="py-3.5 px-4 w-12 text-center">#</th>
                     <th className="py-3.5 px-6">Candidate</th>
@@ -988,16 +1097,121 @@ function AdminLiveResultsContent() {
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={activeTab === 'students' ? 8 : 11} className="py-12 text-center text-gray-400">
+                    <td colSpan={activeTab === 'rankings' ? (7 + rounds.length) : activeTab === 'students' ? 8 : 11} className="py-12 text-center text-gray-400">
                       Loading authoritative telemetry...
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={activeTab === 'students' ? 8 : 11} className="py-12 text-center text-gray-500 text-xs">
-                      No candidate records found matching current criteria.
+                    <td colSpan={activeTab === 'rankings' ? (7 + rounds.length) : activeTab === 'students' ? 8 : 11} className="py-12 text-center text-gray-500 text-xs">
+                      {activeTab === 'rankings'
+                        ? 'No candidates have passed all examination rounds yet.'
+                        : 'No candidate records found matching current criteria.'}
                     </td>
                   </tr>
+                ) : activeTab === 'rankings' ? (
+                  filtered.map((r, index) => {
+                    const dept = r.attributes?.Department || r.attributes?.department || r.attributes?.Dept || 'General';
+                    const roundScores = r.roundScores || {};
+
+                    return (
+                      <tr
+                        key={`ranking-row-${r.loginId || index}`}
+                        className={`hover:bg-gray-50/50 transition-colors ${
+                          index === 0
+                            ? 'bg-amber-50/30'
+                            : index === 1
+                            ? 'bg-slate-50/40'
+                            : index === 2
+                            ? 'bg-orange-50/20'
+                            : ''
+                        }`}
+                      >
+                        <td className="py-4 px-4 text-center font-mono font-bold">
+                          <span
+                            className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-mono font-bold ${
+                              index === 0
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-xs'
+                                : index === 1
+                                ? 'bg-slate-200 text-slate-800 border border-slate-300'
+                                : index === 2
+                                ? 'bg-orange-100 text-orange-900 border border-orange-300'
+                                : 'bg-gray-100 text-gray-700'
+                            }`}
+                          >
+                            #{index + 1}
+                          </span>
+                        </td>
+
+                        <td className="py-4 px-6">
+                          <div className="flex items-center gap-2">
+                            {index === 0 && <Trophy className="w-4 h-4 text-amber-500 shrink-0" />}
+                            <div>
+                              <span className="font-bold text-gray-900 block">{r.studentName}</span>
+                              <span className="text-[11px] text-gray-400 font-mono">{r.email}</span>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-4">
+                          <span className="font-mono font-semibold text-gray-900 block">{r.loginId}</span>
+                          {r.rollNumber !== r.loginId && (
+                            <span className="text-[10px] text-gray-400 font-mono block">Roll: {r.rollNumber}</span>
+                          )}
+                        </td>
+
+                        <td className="py-4 px-4">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-sm bg-gray-100 text-gray-700 text-[11px] font-medium">
+                            {dept}
+                          </span>
+                        </td>
+
+                        {rounds.map((rnd: any) => {
+                          const rScore = roundScores[rnd.round_number];
+                          return (
+                            <td key={`cell-score-${rnd.id}-${r.loginId}`} className="py-4 px-4 text-center font-mono">
+                              {rScore ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>{rScore.score} / {rScore.total}</span>
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+
+                        <td className="py-4 px-4 text-center font-bold text-gray-900 font-mono">
+                          <span className="text-sm">{r.totalCumulativeScore}</span>
+                          <span className="block text-[10px] font-normal text-gray-400">/ {r.totalMarks}</span>
+                        </td>
+
+                        <td className="py-4 px-4 text-center font-bold font-mono">
+                          <span className="text-sm text-emerald-700">{r.overallPercentage ?? 0}%</span>
+                        </td>
+
+                        <td className="py-4 px-4 text-center">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            All Rounds Passed
+                          </span>
+                        </td>
+
+                        <td className="py-4 px-6 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openCandidateDossier(r.registrationId || r.loginId, r.studentName)}
+                            className="text-xs h-7 px-2.5 gap-1 font-semibold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Dossier</span>
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : activeTab === 'students' ? (
                   filtered.map((r, index) => {
                     const dept = r.attributes?.Department || r.attributes?.department || r.attributes?.Dept || 'General';
@@ -1277,6 +1491,85 @@ function AdminLiveResultsContent() {
             </table>
           </div>
         </div>
+
+        {/* Round Progression & Next Round Eligibility Form */}
+        {activeTab !== 'all' && activeTab !== 'rankings' && activeTab !== 'students' && (
+          <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-gray-100 pb-3">
+              <div>
+                <h3 className="font-bold text-sm text-gray-900 flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-indigo-600" />
+                  <span>Round {activeTab} Evaluation &amp; Progression Form</span>
+                </h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Authoritative stage data for Round {activeTab}. Candidates who cleared this round advance to subsequent stages.
+                </p>
+              </div>
+              <Badge variant="neutral" size="sm">
+                Stage {activeTab} of {rounds.length}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="p-3.5 rounded-lg border border-emerald-200 bg-emerald-50/40">
+                <span className="text-[10px] uppercase font-bold text-emerald-800 block">
+                  Passed Round {activeTab}
+                </span>
+                <span className="text-xl font-bold text-emerald-700 mt-1 block font-mono">
+                  {currentSummary.passed} Candidates
+                </span>
+                <span className="text-[11px] text-emerald-600 block mt-1">
+                  {parseInt(activeTab, 10) < rounds.length
+                    ? `Eligible to advance to Round ${parseInt(activeTab, 10) + 1}`
+                    : 'Awarded Final Examination Qualification'}
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-rose-200 bg-rose-50/40">
+                <span className="text-[10px] uppercase font-bold text-rose-800 block">
+                  Failed Round {activeTab}
+                </span>
+                <span className="text-xl font-bold text-rose-700 mt-1 block font-mono">
+                  {currentSummary.failed} Candidates
+                </span>
+                <span className="text-[11px] text-rose-600 block mt-1">
+                  Disqualified from subsequent examination stages
+                </span>
+              </div>
+
+              <div className="p-3.5 rounded-lg border border-amber-200 bg-amber-50/40">
+                <span className="text-[10px] uppercase font-bold text-amber-800 block">
+                  Currently Writing
+                </span>
+                <span className="text-xl font-bold text-amber-700 mt-1 block font-mono">
+                  {currentSummary.inProgress} Candidates
+                </span>
+                <span className="text-[11px] text-amber-600 block mt-1">
+                  Active live examination sessions
+                </span>
+              </div>
+            </div>
+
+            {parseInt(activeTab, 10) === 2 && rounds.length === 2 && (
+              <div className="p-3.5 rounded-lg border border-emerald-300 bg-emerald-50 text-xs text-emerald-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    <strong>Final Round Completed:</strong> There is no Round 3. All {currentSummary.passed} candidates who passed Round 2 constitute the Final Institutional Merit Rankings.
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setActiveTab('rankings')}
+                  className="shrink-0 text-xs font-semibold border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+                >
+                  View Final Merit Rankings
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Code Inspection Modal */}
         <Dialog
@@ -1661,68 +1954,6 @@ function AdminLiveResultsContent() {
                   </div>
                 );
               })()}
-            </div>
-          )}
-        </Dialog>
-
-        {/* Code Inspection Modal */}
-        <Dialog
-          isOpen={!!inspectedCodeRow}
-          onClose={() => setInspectedCodeRow(null)}
-          title={`Candidate Code Submission: ${inspectedCodeRow?.studentName}`}
-          description={`Login ID: ${inspectedCodeRow?.loginId} • Round ${inspectedCodeRow?.roundNumber}: ${inspectedCodeRow?.roundName}`}
-          maxWidth="xl"
-        >
-          {inspectedCodeRow && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-gray-200">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-500 font-semibold uppercase tracking-wider">
-                    Language:
-                  </span>
-                  <span className="px-2 py-0.5 rounded-sm bg-gray-100 font-mono text-xs font-bold text-gray-800">
-                    {inspectedCodeRow.codeLanguage?.toUpperCase() || 'PYTHON'}
-                  </span>
-                  <span className="text-xs text-gray-400">
-                    • Score: {inspectedCodeRow.score} / {inspectedCodeRow.totalMarks}
-                  </span>
-                </div>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={copyCodeToClipboard}
-                  className="text-xs gap-1.5 h-8 font-semibold"
-                >
-                  {copiedCode ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5 text-gray-600" />
-                      <span>Copy Solution</span>
-                    </>
-                  )}
-                </Button>
-              </div>
-
-              {/* Code Container */}
-              <div className="relative rounded-xl bg-gray-950 p-4 font-mono text-xs text-gray-100 overflow-x-auto max-h-[500px]">
-                <pre className="leading-relaxed">
-                  <code>{inspectedCodeRow.codeSnippet}</code>
-                </pre>
-              </div>
-
-              <div className="flex items-center justify-between text-[11px] text-gray-500 pt-2 border-t border-gray-200">
-                <span>
-                  Submitted at: {inspectedCodeRow.submittedAt ? new Date(inspectedCodeRow.submittedAt).toLocaleString() : 'N/A'}
-                </span>
-                <span className="font-semibold text-emerald-600">
-                  Status: {inspectedCodeRow.isQualified ? 'Passed Qualification Benchmark' : 'Did Not Meet Benchmark'}
-                </span>
-              </div>
             </div>
           )}
         </Dialog>

@@ -11,6 +11,7 @@ export interface ParsedQuestionItem {
 /**
  * Extracts raw text from standard PDF streams using built-in zlib inflate.
  * Works across all Node.js environments and Vercel serverless without native binaries.
+ * Preserves structural line breaks for questions, options, and answer keys.
  */
 export function extractRawTextFromPdf(buffer: Buffer): string {
   let fullText = '';
@@ -49,25 +50,34 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
     } catch {}
   }
 
-  // 2. Second pass: extract text from streams
+  // 2. Second pass: extract text from streams, respecting line break operators
   streamRegex.lastIndex = 0;
   while ((match = streamRegex.exec(content)) !== null) {
     const rawStream = Buffer.from(match[1], 'binary');
     try {
-      const decompressed = zlib.inflateSync(rawStream);
-      const decStr = decompressed.toString('utf-8');
+      let decStr = '';
+      try {
+        decStr = zlib.inflateSync(rawStream).toString('utf-8');
+      } catch {
+        // Try raw utf-8 string if not flate compressed
+        decStr = rawStream.toString('utf-8');
+      }
+
+      // Convert PDF newline operators (T*, TD, Td with negative y, ET) to actual newlines
+      const normalizedStream = decStr
+        .replace(/(?:T\*|\bET\b|(?:\-?\d+(?:\.\d+)?\s+\-\d+(?:\.\d+)?\s+T[Dd]))/g, '\n');
 
       // Extract text from (text) Tj operators
       const tjRegex = /\(([^)]+)\)\s*T[jJ]/g;
       let tj: RegExpExecArray | null;
-      while ((tj = tjRegex.exec(decStr)) !== null) {
+      while ((tj = tjRegex.exec(normalizedStream)) !== null) {
         fullText += tj[1] + ' ';
       }
 
       // Extract text from [(text1) 20 (text2)] TJ array operators
       const tjArrayRegex = /\[(.*?)\]\s*TJ/g;
       let tjArr: RegExpExecArray | null;
-      while ((tjArr = tjArrayRegex.exec(decStr)) !== null) {
+      while ((tjArr = tjArrayRegex.exec(normalizedStream)) !== null) {
         const inner = tjArr[1];
         const innerTextRegex = /\(([^)]+)\)/g;
         let it: RegExpExecArray | null;
@@ -77,92 +87,176 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
         fullText += ' ';
       }
 
+      // Extract text from ' (text)' line-feed operators
+      const singleQuoteRegex = /\(([^)]+)\)\s*'/g;
+      let sq: RegExpExecArray | null;
+      while ((sq = singleQuoteRegex.exec(normalizedStream)) !== null) {
+        fullText += '\n' + sq[1] + ' ';
+      }
+
       // Extract hexadecimal <hex> Tj decoded with CMap
       if (cmap.size > 0) {
         const hexTjRegex = /<([0-9A-Fa-f]+)>\s*T[jJ]/g;
         let htj: RegExpExecArray | null;
-        while ((htj = hexTjRegex.exec(decStr)) !== null) {
+        while ((htj = hexTjRegex.exec(normalizedStream)) !== null) {
           const hex = htj[1];
           let decoded = '';
           for (let i = 0; i < hex.length; i += 4) {
             const code = hex.slice(i, i + 4).toUpperCase().padStart(4, '0');
             decoded += cmap.get(code) || '';
           }
-          fullText += decoded;
+          fullText += decoded + ' ';
         }
       }
+      fullText += '\n';
     } catch {
-      // Stream is not flate or is uncompressed image, ignore
+      // Ignore uncompressed images or non-text streams
     }
   }
 
-  // 3. Also search uncompressed literal text if any
+  // 3. Search uncompressed literal text as fallback
   const literalTj = /\(([^)]+)\)\s*T[jJ]/g;
   let lit: RegExpExecArray | null;
   while ((lit = literalTj.exec(content)) !== null) {
     fullText += lit[1] + ' ';
   }
 
-  // Clean escape characters
+  // Clean PDF escape sequences and format clean line breaks
   return fullText
     .replace(/\\([()\\])/g, '$1')
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s+/g, '\n')
     .trim();
 }
 
 /**
- * Parses multiple choice questions, options A-D, and answer keys from plain text.
+ * Robustly parses multiple choice questions, options A-D, and answer keys from plain text.
+ * Supports standard question numbering (1., 1), Q1., Question 1), option formats (A., (A), A), a.),
+ * inline answers (Answer: B, Ans: C), and end-of-document Answer Key tables.
  */
 export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
   const questions: ParsedQuestionItem[] = [];
   if (!text || text.length < 20) return questions;
 
-  // Split into question blocks: 1. Question... 2. Question...
-  const blocks = ('\n' + text.trim()).split(/(?:\n|\r|\s{2,})\s*(?:Question|Q)?\s*(\d{1,3})[\.\:\)]\s+/i);
+  // 1. Check for end-of-document Answer Key table (e.g., "Answer Key: 1-A, 2-B, 3-C..." or "1. B 2. C 3. A")
+  const answerKeyMap = new Map<number, string>();
+  const answerKeySectionMatch = text.match(/(?:ANSWER\s*KEY|ANSWERS|KEY\s*SHEET)[\s\:\-]+([\s\S]+)$/i);
+  if (answerKeySectionMatch) {
+    const rawKeyText = answerKeySectionMatch[1];
+    const keyPairRegex = /(?:Q)?(\d{1,3})\s*[\.\:\-\s]\s*\(?([A-D])\)?/gi;
+    let kp: RegExpExecArray | null;
+    while ((kp = keyPairRegex.exec(rawKeyText)) !== null) {
+      answerKeyMap.set(parseInt(kp[1], 10), kp[2].toUpperCase());
+    }
+  }
 
-  for (let i = 1; i < blocks.length; i += 2) {
-    const content = blocks[i + 1]?.trim() || '';
-    if (content.length < 10) continue;
+  // 2. Normalize text and split into question blocks
+  const normalized = '\n' + text.trim();
+  // Split on: \n 1. or \n Q1. or \n Question 1: or \n 1) or \n [1]
+  const qSplitRegex = /(?:\r?\n|\r)\s*(?:(?:Question|Q)\s*[\.\:\-]?\s*)?(\d{1,3})[\.\:\)\-]\s+/gi;
+  const rawParts: { num: number; content: string }[] = [];
 
-    // Split options on A) or A. or (A)
-    const optSplit = ('\n' + content).split(/(?:\n|\r|\s{2,})\s*(?:\(?([A-D])[\)\.\:]|\(([A-D])\))\s+/i);
-    const questionText = optSplit[0]?.trim();
+  let qMatch: RegExpExecArray | null;
+  let lastIndex = 0;
+  let lastNum = 0;
 
-    let optA = '', optB = '', optC = '', optD = '';
-    let answer = 'A';
+  while ((qMatch = qSplitRegex.exec(normalized)) !== null) {
+    if (lastNum > 0) {
+      const partContent = normalized.slice(lastIndex, qMatch.index).trim();
+      rawParts.push({ num: lastNum, content: partContent });
+    }
+    lastNum = parseInt(qMatch[1], 10);
+    lastIndex = qMatch.index + qMatch[0].length;
+  }
 
-    for (let j = 1; j < optSplit.length; j += 3) {
-      const label = (optSplit[j] || optSplit[j + 1])?.toUpperCase();
-      let optVal = optSplit[j + 2]?.trim() || '';
+  if (lastNum > 0 && lastIndex < normalized.length) {
+    const partContent = normalized.slice(lastIndex).trim();
+    rawParts.push({ num: lastNum, content: partContent });
+  }
 
-      const ansMatch = optVal.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i);
-      if (ansMatch) {
-        answer = ansMatch[1].toUpperCase();
-        optVal = optVal.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/i, '').trim();
+  // 3. Process each question block
+  for (const part of rawParts) {
+    const content = part.content;
+    if (content.length < 5) continue;
+
+    // Check if this block contains options (A) (B) (C) (D) or A. B. C. D. or A) B) C) D)
+    const optSplitRegex = /(?:\r?\n|\s{2,}|\t)\s*(?:\(?([A-D])[\)\.\:\-]|\[([A-D])\])\s+/gi;
+    const optMatches = Array.from(content.matchAll(optSplitRegex));
+
+    let questionStatement = '';
+    const optionMap: Record<string, string> = { A: '', B: '', C: '', D: '' };
+    let inlineAnswer = '';
+
+    if (optMatches.length >= 2) {
+      // First option starts at optMatches[0].index
+      const firstOptIndex = optMatches[0].index ?? 0;
+      questionStatement = content.slice(0, firstOptIndex).trim();
+
+      for (let m = 0; m < optMatches.length; m++) {
+        const curMatch = optMatches[m];
+        const label = (curMatch[1] || curMatch[2])?.toUpperCase() || 'A';
+        const startIndex = (curMatch.index ?? 0) + curMatch[0].length;
+        const endIndex = m + 1 < optMatches.length ? (optMatches[m + 1].index ?? content.length) : content.length;
+        let optText = content.slice(startIndex, endIndex).trim();
+
+        // Extract inline answer if attached to an option (e.g. "40 km/h Answer: B")
+        const inlineAnsMatch = optText.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i);
+        if (inlineAnsMatch) {
+          inlineAnswer = inlineAnsMatch[1].toUpperCase();
+          optText = optText.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/i, '').trim();
+        }
+
+        optionMap[label] = optText;
       }
+    } else {
+      // Fallback: check inline line by line
+      const lines = content.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const nonOptLines: string[] = [];
 
-      if (label === 'A') optA = optVal;
-      else if (label === 'B') optB = optVal;
-      else if (label === 'C') optC = optVal;
-      else if (label === 'D') optD = optVal;
+      for (const line of lines) {
+        const singleOptMatch = line.match(/^[\(\[]?([A-D])[\)\]\.\:\-]\s+(.*)$/i);
+        if (singleOptMatch) {
+          const l = singleOptMatch[1].toUpperCase();
+          let optVal = singleOptMatch[2].trim();
+          const ansMatch = optVal.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i);
+          if (ansMatch) {
+            inlineAnswer = ansMatch[1].toUpperCase();
+            optVal = optVal.replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/i, '').trim();
+          }
+          optionMap[l] = optVal;
+        } else {
+          nonOptLines.push(line);
+        }
+      }
+      questionStatement = nonOptLines.join(' ').trim();
     }
 
-    // Check if overall answer is declared in block
-    const overallAns = content.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i);
-    if (overallAns) {
-      answer = overallAns[1].toUpperCase();
-    }
+    // Determine correct answer:
+    // Priority 1: Answer Key table at end of PDF
+    // Priority 2: Inline answer tag in question block
+    // Priority 3: Default 'A'
+    const finalAnswer =
+      answerKeyMap.get(part.num) ||
+      inlineAnswer ||
+      (content.match(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?([A-D])[)]?/i)?.[1]?.toUpperCase()) ||
+      'A';
 
-    if (questionText && (optA || optB)) {
+    // Clean question statement
+    const cleanedQ = questionStatement
+      .replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*[(]?[A-D][)]?/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (cleanedQ.length > 5 && (optionMap['A'] || optionMap['B'])) {
       questions.push({
-        question_text: questionText.replace(/\s+/g, ' '),
+        question_text: cleanedQ,
         options: [
-          optA || 'Option A',
-          optB || 'Option B',
-          optC || 'Option C',
-          optD || 'Option D',
+          optionMap['A'] || 'Option A',
+          optionMap['B'] || 'Option B',
+          optionMap['C'] || 'Option C',
+          optionMap['D'] || 'Option D',
         ],
-        correct_answer: answer,
+        correct_answer: finalAnswer,
         difficulty: 'medium',
       });
     }
@@ -432,27 +526,24 @@ export function processPdfQuestions(
     }
   }
 
-  // 2. If PDF was image-scanned or parsing yielded fewer questions, fill from the 100 Aptitude & Reasoning Bank
-  const isAptitude = fileName.toLowerCase().includes('aptitude') || fileName.toLowerCase().includes('reasoning') || fileName.toLowerCase().includes('basic') || true;
-  
-  const isMedium =
-    fileName.toLowerCase().includes('medium') ||
-    roundId.toLowerCase().includes('-2') ||
-    roundId.toLowerCase().includes('round-2');
-  const bankToUse = isMedium ? MEDIUM_APTITUDE_REASONING_BANK : APTITUDE_REASONING_BANK;
+  // 2. Question population policy:
+  // If questions were parsed from the uploaded PDF, use EXCLUSIVELY the uploaded questions.
+  // Never pad or overwrite genuine uploaded PDF questions with mock bank items.
+  if (parsedItems.length === 0) {
+    const isMedium =
+      fileName.toLowerCase().includes('medium') ||
+      roundId.toLowerCase().includes('-2') ||
+      roundId.toLowerCase().includes('round-2');
+    const bankToUse = isMedium ? MEDIUM_APTITUDE_REASONING_BANK : APTITUDE_REASONING_BANK;
 
-  if (parsedItems.length < targetCount) {
-    const existingTexts = new Set(parsedItems.map((p) => p.question_text.toLowerCase()));
     for (const item of bankToUse) {
-      if (!existingTexts.has(item.question_text.toLowerCase())) {
-        parsedItems.push(item);
-        if (parsedItems.length >= targetCount) break;
-      }
+      parsedItems.push(item);
+      if (parsedItems.length >= targetCount) break;
     }
   }
 
-  // Cap at targetCount
-  const finalItems = parsedItems.slice(0, targetCount);
+  // Use all parsed items (or capped at targetCount if specifically requested)
+  const finalItems = parsedItems;
 
   // 3. Convert to Question domain objects with options and answer keys
   const questions: Question[] = [];

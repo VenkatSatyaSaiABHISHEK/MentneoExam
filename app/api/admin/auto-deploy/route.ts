@@ -37,13 +37,31 @@ async function executeDeployment(triggerSource: string) {
       triggerSource,
     });
 
-    // 1. Git pull
+    // 1. Git pull with stash protection
     console.log('[Auto-Deploy] [1/3] Pulling latest changes from GitHub...');
-    await execAsync('git pull origin master', { cwd: process.cwd(), timeout: 30000 });
+    try {
+      await execAsync('git stash', { cwd: process.cwd(), timeout: 10000 });
+    } catch {
+      // ignore
+    }
+    await execAsync('git pull origin master', { cwd: process.cwd(), timeout: 35000 });
 
-    // 2. Build Next.js
-    console.log('[Auto-Deploy] [2/3] Building production bundles (npm run build)...');
-    await execAsync('npm run build', { cwd: process.cwd(), timeout: 180000 });
+    // 2. Build Next.js with memory guard
+    console.log('[Auto-Deploy] [2/3] Building production bundles with memory optimization...');
+    await execAsync('NODE_OPTIONS="--max-old-space-size=1024" NEXT_TELEMETRY_DISABLED=1 npm run build', {
+      cwd: process.cwd(),
+      timeout: 240000,
+    });
+
+    // Verify PostgreSQL is alive on Linux
+    try {
+      await execAsync('sudo systemctl is-active --quiet postgresql || sudo systemctl restart postgresql', {
+        cwd: process.cwd(),
+        timeout: 10000,
+      });
+    } catch {
+      // ignore
+    }
 
     // 3. Reload PM2
     console.log('[Auto-Deploy] [3/3] Reloading PM2 exams service...');

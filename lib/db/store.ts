@@ -3333,6 +3333,12 @@ export const db = {
       return Array.from(store.questions.values()).filter((q) => q.round_id === roundId).length;
     }
 
+    // If round already has questions in pool, keep and return them! Never overwrite user-uploaded questions.
+    const existing = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
+    if (existing.length >= count || existing.length >= (round.total_questions || 30)) {
+      return existing.length;
+    }
+
     const isAptitude =
       round.name.toLowerCase().includes('aptitude') ||
       round.name.toLowerCase().includes('reasoning') ||
@@ -3349,16 +3355,13 @@ export const db = {
         round.name.toLowerCase().includes('synthesis');
       const bankToUse = isMedium ? MEDIUM_APTITUDE_REASONING_BANK : APTITUDE_REASONING_BANK;
 
-      const existing = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
       const needed = Math.max(0, count - existing.length);
-      const toCreate = needed > 0 ? needed : count;
+      const toCreate = needed > 0 ? Math.min(needed, bankToUse.length) : Math.min(count, bankToUse.length);
 
       for (let i = 1; i <= toCreate; i++) {
         const qNum = existing.length + i;
         const qId = `q-${roundId}-${String(qNum).padStart(3, '0')}`;
         const item = bankToUse[(qNum - 1) % bankToUse.length];
-        const cycle = Math.floor((qNum - 1) / bankToUse.length);
-        const text = cycle > 0 ? `[Set ${cycle + 1}] ${item.question_text}` : item.question_text;
 
         const options: QuestionOption[] = item.options.map((optText, optIdx) => ({
           id: `opt-${qId}-${String.fromCharCode(65 + optIdx).toLowerCase()}`,
@@ -3372,7 +3375,7 @@ export const db = {
         const qObj: Question = {
           id: qId,
           round_id: roundId,
-          question_text: text,
+          question_text: item.question_text,
           question_type: 'single_choice',
           difficulty: item.difficulty || 'medium',
           marks: round.marks_per_question ?? 1,
@@ -3435,7 +3438,6 @@ export const db = {
     const isAdvanced = round.name.toLowerCase().includes('advanced') || round.round_number >= 2;
     const sampleTopics = isAdvanced ? advancedProblemSolvingTopics : coreFundamentalsTopics;
 
-    const existing = Array.from(store.questions.values()).filter((q) => q.round_id === roundId);
     const needed = Math.max(0, count - existing.length);
     const toCreate = needed > 0 ? needed : count;
 
@@ -3649,6 +3651,12 @@ export const db = {
 
           extractedCount = questions.length;
           (job as any).questions = questions;
+
+          if (round && questions.length > 0) {
+            round.total_questions = questions.length;
+            round.question_pool_count = questions.length;
+            store.rounds.set(round.id, round);
+          }
         } catch (popErr) {
           console.warn('[OCR Engine] Error processing PDF questions:', popErr);
           extractedCount = await this.populateRoundQuestionPool(params.roundId, countToExtract);

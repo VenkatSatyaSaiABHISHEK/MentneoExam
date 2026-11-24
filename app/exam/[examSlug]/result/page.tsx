@@ -202,22 +202,47 @@ function StudentResultContent() {
           </div>
 
           <Badge variant={isQualified ? 'success' : 'danger'} size="md" className="mb-3">
-            {isQualified ? 'Qualification Verified' : 'Round Completed — Did Not Qualify'}
+            {isQualified
+              ? !nextRound
+                ? 'All Examination Rounds Cleared — Final Qualification'
+                : 'Qualification Verified — Advance to Next Round'
+              : 'Round Completed — Did Not Qualify'}
           </Badge>
 
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">
-            {isQualified ? 'Congratulations!' : 'Round Assessment Completed'}
+            {isQualified
+              ? !nextRound
+                ? 'Congratulations, You Pass!'
+                : 'Congratulations!'
+              : 'Round Assessment Completed'}
           </h1>
 
           <p className="mt-3 text-sm text-gray-600 max-w-lg mx-auto leading-relaxed">
             {isQualified
-              ? currentRound?.success_message ||
-                `You have successfully passed ${currentRound?.name || 'this round'} with a qualifying score.`
+              ? !nextRound
+                ? `Congratulations! You have successfully passed and completed all rounds of this examination. There are no further rounds. Your final score has been submitted for institutional merit ranking.`
+                : currentRound?.success_message ||
+                  `You have successfully passed ${currentRound?.name || 'this round'} with a qualifying score.`
               : currentRound?.failure_message ||
                 `Thank you for applying. You have not achieved the minimum qualification marks. Best of luck for future assessments.`}
           </p>
 
-          {/* Qualified Countdown Notice */}
+          {/* Qualified & Final Round Confirmation (No Round 3) */}
+          {isQualified && !nextRound && (
+            <div className="mt-6 p-4 rounded-xl border border-emerald-300 bg-emerald-50 text-xs text-emerald-950 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-md mx-auto">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  <strong>Examination Complete:</strong> Successfully qualified in all rounds.
+                </span>
+              </div>
+              <div className="font-mono font-bold text-emerald-800 bg-white px-2.5 py-1 rounded border border-emerald-200">
+                Merit List Eligible
+              </div>
+            </div>
+          )}
+
+          {/* Qualified Countdown Notice for Next Round */}
           {isQualified && nextRound && (
             <div className="mt-6 p-4 rounded-xl border border-emerald-200 bg-emerald-50/60 text-xs text-emerald-950 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-md mx-auto">
               <div className="flex items-center gap-2">

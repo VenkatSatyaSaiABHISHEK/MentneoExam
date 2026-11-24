@@ -22,6 +22,10 @@ import {
   CheckCircle2,
   AlertTriangle,
   Zap,
+  Terminal,
+  RotateCcw,
+  FileText,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -91,6 +95,52 @@ export default function ClusterDashboardPage() {
   const [deploying, setDeploying] = React.useState(false);
   const [autoRefresh, setAutoRefresh] = React.useState(true);
 
+  // Live Server Logs & Telemetry
+  const [serverLogsData, setServerLogsData] = React.useState<any | null>(null);
+  const [serverLogsLoading, setServerLogsLoading] = React.useState(false);
+  const [actionExecuting, setActionExecuting] = React.useState<string | null>(null);
+  const [lastActionOutput, setLastActionOutput] = React.useState<string | null>(null);
+
+  const fetchServerLogs = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/server-logs');
+      const json = await res.json();
+      if (json.success && json.data) {
+        setServerLogsData(json.data);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleServerAction = async (action: string, actionLabel: string) => {
+    setActionExecuting(action);
+    setLastActionOutput(null);
+    toast.info(`Executing ${actionLabel}...`);
+    try {
+      const res = await fetch('/api/admin/server-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        toast.success(`${actionLabel} completed successfully.`);
+        setLastActionOutput(json.output);
+        fetchServerLogs();
+        fetchTelemetry();
+      } else {
+        toast.error(json.error || `${actionLabel} failed.`);
+        setLastActionOutput(json.error || 'Execution failed');
+      }
+    } catch (err: any) {
+      toast.error('Network error: ' + err.message);
+      setLastActionOutput('Network error: ' + err.message);
+    } finally {
+      setActionExecuting(null);
+    }
+  };
+
   const fetchTelemetry = React.useCallback(async () => {
     try {
       const res = await fetch('/api/admin/cluster');
@@ -107,10 +157,14 @@ export default function ClusterDashboardPage() {
 
   React.useEffect(() => {
     fetchTelemetry();
+    fetchServerLogs();
     if (!autoRefresh) return;
-    const interval = setInterval(fetchTelemetry, 8000);
+    const interval = setInterval(() => {
+      fetchTelemetry();
+      fetchServerLogs();
+    }, 6000);
     return () => clearInterval(interval);
-  }, [fetchTelemetry, autoRefresh]);
+  }, [fetchTelemetry, fetchServerLogs, autoRefresh]);
 
   const handleTriggerDeploy = async () => {
     setDeploying(true);
@@ -374,6 +428,265 @@ export default function ClusterDashboardPage() {
               <span className="text-lg font-bold font-mono text-[#1d1a4a] dark:text-white">
                 {data?.database.counts.results || 0}
               </span>
+            </div>
+          </div>
+        </Card>
+
+        {/* Live Server Telemetry, Commands & Console Logs (Raspberry Pi Monitoring) */}
+        <Card className="p-6 border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#e6e3f8] dark:border-[#2c2854]">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 flex items-center justify-center text-purple-600 dark:text-purple-400">
+                <Terminal className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-[#1d1a4a] dark:text-white flex items-center gap-2">
+                  <span>Raspberry Pi Live Diagnostics &amp; Console Logs</span>
+                  <Badge variant={serverLogsData?.services?.postgresql?.status === 'running' ? 'success' : 'danger'} size="sm">
+                    {serverLogsData?.services?.postgresql?.status === 'running' ? 'Database Online' : 'Database Down'}
+                  </Badge>
+                </h2>
+                <p className="text-xs text-[#7871a8] dark:text-[#a59ed8] mt-0.5">
+                  Real-time Linux process monitoring, memory health, and PM2 logs directly from the server.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fetchServerLogs()}
+                className="text-xs h-8 gap-1.5 font-semibold"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh Logs</span>
+              </Button>
+            </div>
+          </div>
+
+          {/* Quick Telemetry Indicators */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+            <div className="p-3 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b]">
+              <span className="text-[10px] uppercase font-bold text-[#7871a8] block">PostgreSQL (5432)</span>
+              <span className={`text-sm font-bold font-mono mt-1 flex items-center gap-1.5 ${
+                serverLogsData?.services?.postgresql?.status === 'running' ? 'text-emerald-600' : 'text-rose-600'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${
+                  serverLogsData?.services?.postgresql?.status === 'running' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'
+                }`} />
+                {serverLogsData?.services?.postgresql?.status === 'running' ? 'Active / 5432' : 'Stopped / Down'}
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b]">
+              <span className="text-[10px] uppercase font-bold text-[#7871a8] block">Next.js Web (3000)</span>
+              <span className={`text-sm font-bold font-mono mt-1 flex items-center gap-1.5 ${
+                serverLogsData?.services?.nextjs?.status === 'listening' ? 'text-emerald-600' : 'text-rose-600'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${
+                  serverLogsData?.services?.nextjs?.status === 'listening' ? 'bg-emerald-500' : 'bg-rose-500'
+                }`} />
+                {serverLogsData?.services?.nextjs?.status === 'listening' ? 'Listening' : 'Down'}
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b]">
+              <span className="text-[10px] uppercase font-bold text-[#7871a8] block">RAM Usage</span>
+              <span className="text-sm font-bold font-mono text-[#1d1a4a] dark:text-white mt-1 block">
+                {serverLogsData?.host?.ram?.usedMB || 0} / {serverLogsData?.host?.ram?.totalMB || 0} MB
+              </span>
+              <span className="text-[10px] text-[#7871a8] font-mono">
+                {serverLogsData?.host?.ram?.percent || 0}% Allocated
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b]">
+              <span className="text-[10px] uppercase font-bold text-[#7871a8] block">Swap Memory</span>
+              <span className="text-sm font-bold font-mono text-[#1d1a4a] dark:text-white mt-1 block">
+                {serverLogsData?.host?.swap?.usedMB || 0} / {serverLogsData?.host?.swap?.totalMB || 0} MB
+              </span>
+              <span className="text-[10px] text-[#7871a8] font-mono">
+                {serverLogsData?.host?.swap?.percent || 0}% Swap
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b]">
+              <span className="text-[10px] uppercase font-bold text-[#7871a8] block">Disk Space</span>
+              <span className="text-sm font-bold font-mono text-[#1d1a4a] dark:text-white mt-1 block">
+                {serverLogsData?.host?.disk?.usePercent || '0%'}
+              </span>
+              <span className="text-[10px] text-[#7871a8] font-mono truncate block">
+                {serverLogsData?.host?.disk?.available || 'Free'} Avail
+              </span>
+            </div>
+
+            <div className="p-3 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b]">
+              <span className="text-[10px] uppercase font-bold text-[#7871a8] block">Git Revision</span>
+              <span className="text-sm font-bold font-mono text-[#1d1a4a] dark:text-white mt-1 block truncate">
+                {serverLogsData?.git?.currentHash || 'HEAD'}
+              </span>
+              <span className="text-[10px] text-emerald-600 font-mono">
+                {serverLogsData?.git?.statusSummary === 'clean' ? 'Tree Clean' : 'Modified'}
+              </span>
+            </div>
+          </div>
+
+          {/* Quick Action Commands */}
+          <div className="p-4 rounded-xl border border-[#e6e3f8] dark:border-[#2c2854] bg-[#faf9fe] dark:bg-[#1c193b] space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-[#1d1a4a] dark:text-white uppercase tracking-wider text-[11px]">
+                One-Click Server Maintenance Commands
+              </span>
+              <span className="text-[11px] text-[#7871a8] font-mono">
+                Executes directly on host
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={actionExecuting !== null}
+                onClick={() => handleServerAction('git_pull', 'Git Pull (Origin Master)')}
+                className="text-xs h-8 gap-1.5 font-semibold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+              >
+                <GitBranch className="w-3.5 h-3.5" />
+                <span>Pull Latest Code (git pull)</span>
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={actionExecuting !== null}
+                onClick={() => handleServerAction('restart_postgres', 'Restart PostgreSQL Database')}
+                className="text-xs h-8 gap-1.5 font-semibold border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+              >
+                <Database className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Restart Database (PostgreSQL)</span>
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={actionExecuting !== null}
+                onClick={() => handleServerAction('restart_exams', 'Restart PM2 Exams Service')}
+                className="text-xs h-8 gap-1.5 font-semibold border-amber-300 text-amber-800 hover:bg-amber-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                <span>Restart Next.js Service (PM2)</span>
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={actionExecuting !== null}
+                onClick={() => handleServerAction('clear_logs', 'Flush PM2 Logs')}
+                className="text-xs h-8 gap-1.5 font-semibold border-gray-300 text-gray-700 hover:bg-gray-100"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-gray-500" />
+                <span>Flush Logs</span>
+              </Button>
+            </div>
+
+            {/* Last Action Output Box */}
+            {lastActionOutput && (
+              <div className="mt-3 p-3 rounded-lg bg-gray-950 text-gray-200 font-mono text-xs overflow-x-auto border border-gray-800">
+                <span className="text-[10px] text-gray-400 block pb-1 border-b border-gray-800 font-sans">
+                  Command Output:
+                </span>
+                <pre className="mt-1 leading-relaxed whitespace-pre-wrap">{lastActionOutput}</pre>
+              </div>
+            )}
+          </div>
+
+          {/* PM2 Process Table */}
+          {Array.isArray(serverLogsData?.services?.pm2) && serverLogsData.services.pm2.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-[#1d1a4a] dark:text-white uppercase tracking-wider text-[11px] block">
+                Managed PM2 Daemon Processes
+              </span>
+              <div className="border border-[#e6e3f8] dark:border-[#2c2854] rounded-xl overflow-hidden">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-[#faf9fe] dark:bg-[#1c193b] border-b border-[#e6e3f8] dark:border-[#2c2854] text-[10px] uppercase text-[#7871a8]">
+                    <tr>
+                      <th className="py-2 px-3">Process Name</th>
+                      <th className="py-2 px-3">Status</th>
+                      <th className="py-2 px-3">Memory</th>
+                      <th className="py-2 px-3">CPU</th>
+                      <th className="py-2 px-3">Restarts</th>
+                      <th className="py-2 px-3">Uptime</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                    {serverLogsData.services.pm2.map((proc: any) => (
+                      <tr key={`pm2-proc-${proc.id}-${proc.name}`} className="hover:bg-gray-50/50 dark:hover:bg-gray-900/40">
+                        <td className="py-2 px-3 font-bold text-[#1d1a4a] dark:text-white">{proc.name}</td>
+                        <td className="py-2 px-3">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            proc.status === 'online'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-rose-100 text-rose-800'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              proc.status === 'online' ? 'bg-emerald-500' : 'bg-rose-500'
+                            }`} />
+                            {proc.status}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3">{proc.memoryMB} MB</td>
+                        <td className="py-2 px-3">{proc.cpu}%</td>
+                        <td className="py-2 px-3">{proc.restarts}</td>
+                        <td className="py-2 px-3">{formatUptime(proc.uptimeSec)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Real-Time Console Logs Terminal */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-[#1d1a4a] dark:text-white uppercase tracking-wider text-[11px] flex items-center gap-2">
+                <FileText className="w-3.5 h-3.5 text-[#6355d8]" />
+                <span>Console Log Stream (Last 50 Lines)</span>
+              </span>
+              <span className="text-[11px] text-[#7871a8] font-mono">
+                Auto-refreshes with cluster poll
+              </span>
+            </div>
+
+            <div className="rounded-xl bg-gray-950 p-4 font-mono text-[11px] text-gray-200 overflow-x-auto max-h-96 border border-gray-800 shadow-inner">
+              {Array.isArray(serverLogsData?.logs) && serverLogsData.logs.length > 0 ? (
+                serverLogsData.logs.map((line: string, idx: number) => {
+                  const isErr = line.toLowerCase().includes('error') || line.toLowerCase().includes('fatal') || line.toLowerCase().includes('failed');
+                  const isWarn = line.toLowerCase().includes('warn');
+                  const isHeader = line.startsWith('===');
+
+                  return (
+                    <div
+                      key={`srv-log-line-${idx}`}
+                      className={`py-0.5 leading-relaxed font-mono whitespace-pre-wrap ${
+                        isHeader
+                          ? 'text-indigo-400 font-bold border-b border-gray-800 pb-1 mt-2 mb-1'
+                          : isErr
+                          ? 'text-rose-400 font-semibold'
+                          : isWarn
+                          ? 'text-amber-300'
+                          : 'text-gray-300'
+                      }`}
+                    >
+                      {line}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-gray-500 italic py-4 text-center">
+                  Waiting for server telemetry and PM2 log stream...
+                </div>
+              )}
             </div>
           </div>
         </Card>
