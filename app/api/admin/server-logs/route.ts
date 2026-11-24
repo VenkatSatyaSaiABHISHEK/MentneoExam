@@ -122,9 +122,10 @@ export async function GET() {
     }
 
     // 2. Service Health (PostgreSQL & Next.js ports)
+    const appPort = parseInt(process.env.PORT || '3000', 10);
     const [isPostgresPortOpen, isNextJsPortOpen] = await Promise.all([
       checkPortOpen(5432, '127.0.0.1', 1000),
-      checkPortOpen(3000, '127.0.0.1', 1000),
+      checkPortOpen(appPort, '127.0.0.1', 1000),
     ]);
 
     let pgServiceActive = isPostgresPortOpen;
@@ -256,7 +257,8 @@ export async function GET() {
             status: isPostgresPortOpen ? 'running' : 'down',
           },
           nextjs: {
-            port3000: isNextJsPortOpen,
+            port: appPort,
+            isOpen: isNextJsPortOpen,
             status: isNextJsPortOpen ? 'listening' : 'down',
           },
           pm2: pm2Processes,
