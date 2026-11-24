@@ -140,15 +140,27 @@ export async function ensureDatabaseSchema(): Promise<{ success: boolean; messag
         registration_id     TEXT        NOT NULL REFERENCES public.registrations(id) ON DELETE CASCADE,
         round_id            TEXT        NOT NULL REFERENCES public.examination_rounds(id) ON DELETE CASCADE,
         started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deadline_at         TIMESTAMPTZ,
         submitted_at        TIMESTAMPTZ,
         status              TEXT        NOT NULL DEFAULT 'in_progress',
         score               NUMERIC(8,2) DEFAULT 0,
         cheating_warnings   INTEGER     NOT NULL DEFAULT 0,
         is_disqualified     BOOLEAN     NOT NULL DEFAULT false,
+        assigned_question_ids JSONB     DEFAULT '[]'::jsonb,
+        ip_address          TEXT,
+        user_agent          TEXT,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT uq_reg_round_attempt UNIQUE (registration_id, round_id)
       );
+
+      -- Ensure existing tables have the required columns
+      ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+      ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS assigned_question_ids JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS ip_address TEXT;
+      ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS user_agent TEXT;
+      ALTER TABLE public.examination_rounds ADD COLUMN IF NOT EXISTS question_selection_strategy TEXT DEFAULT 'random';
+      ALTER TABLE public.examination_rounds ADD COLUMN IF NOT EXISTS next_round_delay_seconds INTEGER DEFAULT 60;
     `);
 
     // 10. Attempt Answers Table

@@ -1,6 +1,14 @@
 import { Pool, QueryResult, QueryResultRow } from 'pg';
 
 let pool: Pool | null = null;
+let schemaBootstrapped = false;
+function triggerSchemaBootstrap() {
+  if (schemaBootstrapped) return;
+  schemaBootstrapped = true;
+  import('@/lib/db/auto-migrate')
+    .then(({ ensureDatabaseSchema }) => ensureDatabaseSchema())
+    .catch((err) => console.warn('[Auto-Migrate Startup Warning]:', err.message));
+}
 
 export function getPgPool(): Pool {
   if (!pool) {
@@ -28,6 +36,8 @@ export function getPgPool(): Pool {
       }
       pool = null;
     });
+
+    triggerSchemaBootstrap();
   }
   return pool;
 }

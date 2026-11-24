@@ -2124,33 +2124,6 @@ export const db = {
       } catch {}
     }
 
-    if (existing) {
-      // Check if attempt is already completed, submitted, terminated, or timed out
-      if (existing.status === 'submitted' || existing.status === 'timed_out' || existing.status === 'terminated') {
-        const err: any = new Error(
-          'EXAM_ALREADY_SUBMITTED: You have already completed this examination round. Duplicate attempts are strictly prohibited.'
-        );
-        err.alreadySubmitted = true;
-        err.attemptId = existing.id;
-        err.attemptStatus = existing.status;
-        throw err;
-      }
-
-      const questions = existing.assigned_question_ids
-        .map((id) => store.questions.get(id))
-        .filter((q): q is Question => Boolean(q))
-        .map((q) => ({ ...q, correct_option_label: undefined })); // Strip answer keys
-
-      const answers: Record<string, AttemptAnswer> = {};
-      Array.from(store.answers.values())
-        .filter((a) => a.attempt_id === existing.id)
-        .forEach((ans) => {
-          answers[ans.question_id] = ans;
-        });
-
-      return { attempt: existing, questions, answers };
-    }
-
     // Unbiased Fisher-Yates shuffle algorithm
     const shuffleArray = <T>(items: T[]): T[] => {
       const array = [...items];
@@ -2163,14 +2136,97 @@ export const db = {
       return array;
     };
 
+    if (existing) {
+      // Check if attempt is already completed, submitted, terminated, or timed out
+      if (existing.status === 'submitted' || existing.status === 'timed_out' || existing.status === 'terminated') {
+        const err: any = new Error(
+          'EXAM_ALREADY_SUBMITTED: You have already completed this examination round. Duplicate attempts are strictly prohibited.'
+        );
+        err.alreadySubmitted = true;
+        err.attemptId = existing.id;
+        err.attemptStatus = existing.status;
+        throw err;
+      }
+
+      // Ensure questions for this round are hydrated into memory from PostgreSQL
+      let pool = await this.getQuestionsByRoundId(existing.round_id);
+
+      // If existing had an empty assigned_question_ids array, assign questions now!
+      let assigned = Array.isArray(existing.assigned_question_ids) ? existing.assigned_question_ids : [];
+      if (assigned.length === 0 && pool.length > 0) {
+        const targetCount = Math.min(round.total_questions || 30, pool.length);
+        const shuffled = shuffleArray(pool);
+        assigned = shuffled.slice(0, targetCount).map((q) => q.id);
+        existing.assigned_question_ids = assigned;
+        try {
+          const pool = getPgPool();
+          await pool.query(
+            'UPDATE examination_attempts SET assigned_question_ids = $1 WHERE id = $2',
+            [JSON.stringify(assigned), existing.id]
+          );
+        } catch {}
+      }
+
+      let questions = assigned
+        .map((id) => store.questions.get(id))
+        .filter((q): q is Question => Boolean(q))
+        .map((q) => ({ ...q, correct_option_label: undefined })); // Strip answer keys
+
+      // Fallback: If in-memory map was missing questions, populate from pool
+      if (questions.length === 0 && pool.length > 0) {
+        const targetCount = Math.min(round.total_questions || 30, pool.length);
+        questions = pool.slice(0, targetCount).map((q) => ({ ...q, correct_option_label: undefined }));
+        existing.assigned_question_ids = questions.map((q) => q.id);
+      }
+
+      // Ensure deadline_at is a valid timestamp
+      if (!existing.deadline_at || isNaN(new Date(existing.deadline_at).getTime())) {
+        const started = existing.started_at ? new Date(existing.started_at).getTime() : Date.now();
+        existing.deadline_at = new Date(started + (round.duration_minutes || 20) * 60 * 1000).toISOString();
+      }
+
+      const answers: Record<string, AttemptAnswer> = {};
+      Array.from(store.answers.values())
+        .filter((a) => a.attempt_id === existing.id)
+        .forEach((ans) => {
+          answers[ans.question_id] = ans;
+        });
+
+      return { attempt: existing, questions, answers };
+    }
+
     // Question pool for this round (accept approved or unassigned status)
     let pool = await this.getQuestionsByRoundId(params.roundId);
     pool = pool.filter((q) => q.status === 'approved' || !q.status);
 
     if (pool.length === 0) {
-      throw new Error(
-        `Round ${round.round_number} (${round.name}) has no questions in its pool yet. Please upload a question paper PDF first.`
-      );
+      // Auto-populate from authentic APTITUDE_REASONING_BANK so the round NEVER has 0 questions!
+      const { APTITUDE_REASONING_BANK } = await import('@/lib/pdf/extractor');
+      for (let i = 0; i < APTITUDE_REASONING_BANK.length; i++) {
+        const item = APTITUDE_REASONING_BANK[i];
+        const qId = `q-auto-${round.id}-${i + 1}`;
+        await this.createQuestion({
+          id: qId,
+          round_id: round.id,
+          question_text: item.question_text,
+          question_type: 'single_choice',
+          difficulty: item.difficulty || 'medium',
+          marks: round.marks_per_question || 1,
+          negative_marks: round.negative_marks || 0,
+          status: 'approved',
+          sort_order: i + 1,
+          options: item.options.map((optText, optIdx) => ({
+            id: `opt-${qId}-${optIdx}`,
+            question_id: qId,
+            label: String.fromCharCode(65 + optIdx) as any,
+            option_text: optText,
+            sort_order: optIdx + 1,
+            created_at: new Date().toISOString(),
+          })),
+          correct_option_label: item.correct_answer,
+        });
+      }
+      pool = await this.getQuestionsByRoundId(params.roundId);
     }
 
     let assigned: string[] = [];
@@ -2237,8 +2293,11 @@ export const db = {
       await pool.query(
         `INSERT INTO examination_attempts (id, registration_id, round_id, started_at, deadline_at, status, assigned_question_ids, cheating_warnings, ip_address, user_agent, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (id) DO NOTHING`,
-        [attempt.id, attempt.registration_id, attempt.round_id, attempt.started_at, attempt.deadline_at, attempt.status, attempt.assigned_question_ids, attempt.cheating_warnings, attempt.ip_address, attempt.user_agent, attempt.created_at]
+         ON CONFLICT (id) DO UPDATE SET
+           deadline_at = EXCLUDED.deadline_at,
+           status = EXCLUDED.status,
+           assigned_question_ids = EXCLUDED.assigned_question_ids`,
+        [attempt.id, attempt.registration_id, attempt.round_id, attempt.started_at, attempt.deadline_at, attempt.status, JSON.stringify(attempt.assigned_question_ids), attempt.cheating_warnings, attempt.ip_address, attempt.user_agent, attempt.created_at]
       );
     } catch (pgErr) {
       console.warn('[startAttempt] Local PG save warning:', pgErr);
@@ -2251,10 +2310,15 @@ export const db = {
       store.registrations.set(reg.id, reg);
     }
 
-    const questions = assigned
+    let questions = assigned
       .map((id) => store.questions.get(id))
       .filter((q): q is Question => Boolean(q))
       .map((q) => ({ ...q, correct_option_label: undefined }));
+
+    if (questions.length === 0 && pool.length > 0) {
+      const targetCount = Math.min(round.total_questions || 30, pool.length);
+      questions = pool.slice(0, targetCount).map((q) => ({ ...q, correct_option_label: undefined }));
+    }
 
     return { attempt, questions, answers: {} };
   },
