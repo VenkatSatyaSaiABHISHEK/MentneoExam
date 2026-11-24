@@ -31,7 +31,6 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog } from '@/components/ui/dialog';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { CodingSandbox } from '@/components/exam/coding-sandbox';
-import { SystemClockTelemetry } from '@/components/common/system-clock-telemetry';
 import { formatTimeRemaining, cn } from '@/lib/utils';
 import { Question, ExaminationAttempt, AttemptAnswer, Student, ExaminationRound } from '@/types';
 import { offlineSync, QueuedAnswer } from '@/lib/exam/offline-sync';
@@ -83,37 +82,11 @@ function ExaminationEngineContent() {
   const [submitModalOpen, setSubmitModalOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [mobilePaletteOpen, setMobilePaletteOpen] = React.useState(false);
-  const [pingLatency, setPingLatency] = React.useState<number | null>(18);
 
   // Pre-Round 3 (Coding) Briefing Modal state
   const [briefingModalOpen, setBriefingModalOpen] = React.useState(false);
   const [briefingCountdown, setBriefingCountdown] = React.useState(15);
   const [briefingConfirmed, setBriefingConfirmed] = React.useState(false);
-
-  // Periodic Campus Wi-Fi Latency Measurement
-  React.useEffect(() => {
-    let mounted = true;
-    async function measurePing() {
-      try {
-        const start = performance.now();
-        const res = await fetch('/api/ping');
-        if (res.ok && mounted) {
-          const lat = Math.round(performance.now() - start);
-          setPingLatency(lat);
-        } else if (mounted) {
-          setPingLatency(null);
-        }
-      } catch {
-        if (mounted) setPingLatency(null);
-      }
-    }
-    measurePing();
-    const interval = setInterval(measurePing, 15000);
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, []);
 
   // 1. Initial Load: Register / Start Attempt
   React.useEffect(() => {
@@ -928,76 +901,52 @@ function ExaminationEngineContent() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-50/60 select-none">
       {/* Sticky Top Engine Bar */}
-      <header className="sticky top-0 z-30 w-full border-b border-gray-200 bg-white">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
-          {/* Exam info */}
-          <div className="flex items-center gap-3 truncate">
-            <div className="w-8 h-8 rounded-lg bg-gray-900 text-white flex items-center justify-center font-bold text-xs shrink-0">
+      <header className="sticky top-0 z-30 w-full border-b border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-[#121026]/95 backdrop-blur-sm shadow-xs">
+        <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          {/* Exam & Candidate Info */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-gray-900 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
               R{roundNum}
             </div>
-            <div className="truncate">
-              <h1 className="text-sm font-bold text-gray-900 truncate">{exam?.name}</h1>
-              <p className="text-[11px] text-gray-500 font-medium truncate">
-                {currentRound?.name} • Candidate: {student?.full_name || 'Registered'} ({student?.roll_number || 'ID'})
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-bold text-gray-900 dark:text-white truncate">
+                {exam?.name}
+              </h1>
+              <p className="text-xs text-gray-500 dark:text-gray-400 font-medium truncate">
+                {currentRound?.name} {student ? `• ${student.full_name} (${student.roll_number})` : ''}
               </p>
             </div>
           </div>
 
-          {/* Quick status pill, Live Telemetry Clock and submit button */}
-          <div className="flex items-center gap-3">
-            <SystemClockTelemetry showDatabaseStatus={false} className="hidden lg:inline-flex" />
+          {/* Prominent High-Visibility Countdown Timer */}
+          <div className="flex items-center gap-2 px-3.5 sm:px-5 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80 shadow-xs">
+            <Clock className={cn("w-4 sm:w-5 h-4 sm:h-5", isLowTime ? "text-rose-600 animate-pulse" : "text-indigo-600 dark:text-indigo-400")} />
+            <div className="flex items-baseline gap-1.5">
+              <span className={cn(
+                "font-mono text-base sm:text-xl font-bold tracking-tight",
+                isLowTime ? "text-rose-600 animate-pulse" : "text-gray-900 dark:text-white"
+              )}>
+                {formatTimeRemaining(secondsRemaining)}
+              </span>
+              <span className="hidden sm:inline text-[11px] text-gray-500 font-medium uppercase tracking-wider">
+                remaining
+              </span>
+            </div>
+          </div>
 
-            {/* Live Campus Wi-Fi Latency Pill */}
-            {pingLatency !== null ? (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono text-emerald-800 bg-emerald-50/80 border border-emerald-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span>{pingLatency}ms Campus Wi-Fi</span>
-              </span>
-            ) : (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-mono text-amber-800 bg-amber-50 border border-amber-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                <span>Local Buffer Active</span>
-              </span>
-            )}
-
-            {isAiAllowed ? (
-              <Badge variant="info" size="sm" className="hidden sm:inline-flex gap-1">
-                <Sparkles className="w-3 h-3" />
-                <span>AI Permitted</span>
-              </Badge>
-            ) : (
-              <Badge variant="neutral" size="sm" className="hidden sm:inline-flex gap-1">
-                <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                <span>Proctored</span>
-              </Badge>
-            )}
-
-            {/* High-Concurrency Answer Sync Pill */}
-            {syncStatus === 'saving' && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
-                <span>Saving to Cloud...</span>
-              </span>
-            )}
-            {syncStatus === 'offline' && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium bg-amber-50 text-amber-800 border border-amber-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
-                <span>Cached Locally ({pendingCount})</span>
-              </span>
-            )}
-            {syncStatus === 'saved' && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium text-emerald-700 bg-emerald-50 border border-emerald-200">
-                <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Cloud Synced</span>
-              </span>
-            )}
+          {/* Quick status count and Submit button */}
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+              <span>{answeredCount} / {questions.length} answered</span>
+            </span>
 
             {/* Mobile palette toggle */}
             <button
               onClick={() => setMobilePaletteOpen(true)}
               className="lg:hidden p-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"
+              aria-label="Open question palette"
             >
-              <Menu className="w-4 h-4" />
+              <Menu className="w-5 h-5" />
             </button>
 
             {/* Submit Button */}
@@ -1006,11 +955,11 @@ function ExaminationEngineContent() {
               size="sm"
               disabled={isSubmitLocked}
               onClick={() => setSubmitModalOpen(true)}
-              className="text-xs font-semibold uppercase tracking-wider gap-1.5"
+              className="text-xs font-semibold uppercase tracking-wider gap-1.5 h-10 px-4"
             >
               {isSubmitLocked ? (
                 <>
-                  <Lock className="w-3 h-3 text-gray-400" />
+                  <Lock className="w-3.5 h-3.5 text-gray-400" />
                   <span>Submit in {formatTimeRemaining(submitLockRemaining)}</span>
                 </>
               ) : (
@@ -1023,10 +972,10 @@ function ExaminationEngineContent() {
           </div>
         </div>
 
-        {/* Progress bar */}
-        <div className="w-full h-1 bg-gray-100">
+        {/* Top Progress bar */}
+        <div className="w-full h-1 bg-gray-100 dark:bg-gray-800">
           <div
-            className="h-1 bg-gray-900 transition-all duration-300"
+            className="h-1 bg-indigo-600 transition-all duration-300"
             style={{ width: `${(answeredCount / Math.max(1, questions.length)) * 100}%` }}
           />
         </div>
@@ -1069,12 +1018,12 @@ function ExaminationEngineContent() {
         </div>
       )}
 
-      {/* Main Spacious 2-Column Workspace (Claude / ChatGPT / WhatsApp Standard) */}
-      <div className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* Main Spacious Full-Width Workspace */}
+      <div className="flex-1 w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 py-5 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* ========================================================= */}
-        {/* MAIN WORKSPACE: SPACIOUS QUESTION CARD (8 OF 12 COLS)     */}
+        {/* MAIN WORKSPACE: SPACIOUS QUESTION CARD                    */}
         {/* ========================================================= */}
-        <main className="lg:col-span-8 flex flex-col bg-white dark:bg-[#15132d] border border-[#e6e3f8] dark:border-[#2c2854] rounded-2xl p-6 sm:p-8 md:p-10 shadow-[0_4px_24px_rgba(184,179,255,0.08)] min-h-[580px]">
+        <main className="lg:col-span-8 xl:col-span-8 2xl:col-span-9 flex flex-col bg-white dark:bg-[#15132d] border border-[#e6e3f8] dark:border-[#2c2854] rounded-2xl p-6 sm:p-8 md:p-10 shadow-[0_4px_24px_rgba(184,179,255,0.08)] min-h-[580px]">
           {currentQuestion ? (
             isCodingRound ? (
               /* Coding Sandbox Interface */
@@ -1106,9 +1055,9 @@ function ExaminationEngineContent() {
               <div className="flex-1 flex flex-col">
                 {/* Question Meta Bar */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#e6e3f8] dark:border-[#2c2854] mb-6">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold font-mono px-2.5 py-1 rounded-lg bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] shadow-xs">
-                      Q {currentIndex + 1} of {questions.length}
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs font-bold font-mono px-3 py-1 rounded-lg bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] shadow-xs">
+                      Question {currentIndex + 1} of {questions.length}
                     </span>
                     <Badge variant="neutral">{currentQuestion.difficulty}</Badge>
                     <span className="text-xs text-[#554e80] dark:text-[#a8a1dc] font-mono">
@@ -1117,52 +1066,31 @@ function ExaminationEngineContent() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {/* Live Answer Status Indicator */}
-                    {currentAnswer?.selected_option && (
-                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono border border-[#e6e3f8] dark:border-[#2c2854] bg-[#f8f7fe] dark:bg-[#1a1738]">
-                        {questionSyncMap[currentQuestion.id] === 'synced' ? (
-                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300 font-semibold">
-                            <CheckCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                            <span>Cloud Synced</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[#554e80] dark:text-[#a8a1dc] font-medium">
-                            <Check className="w-3.5 h-3.5 text-slate-400" />
-                            <span>Device Saved (0ms)</span>
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {savingAnswer && <span className="text-[11px] text-[#7871a8] animate-pulse font-mono">Saving...</span>}
-
                     <button
                       onClick={handleToggleMarkReview}
                       className={cn(
-                        'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors cursor-pointer',
+                        'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer',
                         currentAnswer?.is_marked_for_review
                           ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200'
                           : 'border-[#e6e3f8] dark:border-[#2c2854] text-[#554e80] dark:text-[#a8a1dc] hover:bg-[#f0effe] dark:hover:bg-[#232049]'
                       )}
                     >
                       <BookmarkCheck className="w-3.5 h-3.5" />
-                      <span>{currentAnswer?.is_marked_for_review ? 'Marked' : 'Mark for Review'}</span>
+                      <span>{currentAnswer?.is_marked_for_review ? 'Marked for Review' : 'Mark for Review'}</span>
                       <kbd className="hidden sm:inline px-1 py-0.2 rounded bg-black/5 dark:bg-white/10 text-[9px] font-mono">M</kbd>
                     </button>
                   </div>
                 </div>
 
                 {/* Question Text */}
-                <div className="text-base sm:text-lg font-medium text-[#1d1a4a] dark:text-[#f4f3ff] leading-relaxed">
+                <div className="text-lg sm:text-xl font-medium text-[#1d1a4a] dark:text-[#f4f3ff] leading-relaxed">
                   {currentQuestion.question_text}
                 </div>
 
                 {/* Options List */}
-                <div className="mt-8 space-y-3 flex-1" role="radiogroup" aria-label="Question choices">
-                  {(currentQuestion.options || []).map((opt, optIndex) => {
+                <div className="mt-8 space-y-3.5 flex-1" role="radiogroup" aria-label="Question choices">
+                  {(currentQuestion.options || []).map((opt) => {
                     const isSelected = currentAnswer?.selected_option === opt.label;
-                    const isSynced = questionSyncMap[currentQuestion.id] === 'synced';
-                    const hotkeyDigit = optIndex < 9 ? String(optIndex + 1) : null;
                     return (
                       <button
                         key={opt.id}
@@ -1180,7 +1108,7 @@ function ExaminationEngineContent() {
                         <div className="flex items-center gap-4 flex-1">
                           <span
                             className={cn(
-                              'w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black font-mono shrink-0 transition-colors shadow-xs',
+                              'w-9 h-9 rounded-xl flex items-center justify-center text-xs font-black font-mono shrink-0 transition-colors shadow-xs',
                               isSelected
                                 ? 'bg-[#b8b3ff] dark:bg-[#1d1a4a] text-[#1d1a4a] dark:text-[#f4f3ff]'
                                 : 'border border-[#d5d0f5] dark:border-[#3a3568] bg-[#f5f4ff] dark:bg-[#1d1a42] text-[#1d1a4a] dark:text-[#b8b3ff] group-hover:border-[#b8b3ff] group-hover:bg-[#ebe8ff]'
@@ -1190,7 +1118,7 @@ function ExaminationEngineContent() {
                           </span>
                           <span
                             className={cn(
-                              'text-sm sm:text-base font-medium leading-relaxed',
+                              'text-base sm:text-lg font-medium leading-relaxed',
                               isSelected
                                 ? 'text-white dark:text-[#0d0c1d] font-semibold'
                                 : 'text-[#1d1a4a] dark:text-[#e4e2fd]'
@@ -1200,36 +1128,13 @@ function ExaminationEngineContent() {
                           </span>
                         </div>
 
-                        <div className="shrink-0 flex items-center gap-2">
-                          {/* Keyboard hotkey hint badge */}
-                          <span
-                            className={cn(
-                              'hidden sm:inline-flex items-center gap-1 font-mono text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md transition-colors',
-                              isSelected
-                                ? 'bg-white/20 dark:bg-black/20 text-white/90 dark:text-black/80'
-                                : 'bg-[#f5f4ff] dark:bg-[#1c193b] text-[#7871a8] dark:text-[#a59ed8] border border-[#e6e3f8] dark:border-[#2c2854] group-hover:border-[#b8b3ff]/50'
-                            )}
-                          >
-                            Key {opt.label}{hotkeyDigit ? ` / ${hotkeyDigit}` : ''}
-                          </span>
-
-                          {/* WhatsApp-style live sync status chip */}
-                          {isSelected && (
-                            <div className="flex items-center gap-1 font-mono text-xs">
-                              {isSynced ? (
-                                <span className="inline-flex items-center gap-1 text-emerald-300 dark:text-emerald-950 bg-white/15 dark:bg-emerald-950/20 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                                  <CheckCheck className="w-3.5 h-3.5 text-emerald-300 dark:text-emerald-950" />
-                                  <span>Synced</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-purple-200 dark:text-purple-950 bg-white/15 dark:bg-purple-950/20 px-2 py-0.5 rounded-md text-[11px]">
-                                  <Check className="w-3.5 h-3.5 text-purple-200 dark:text-purple-950" />
-                                  <span>Saved</span>
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
+                        {isSelected && (
+                          <div className="shrink-0 flex items-center">
+                            <span className="w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center">
+                              <Check className="w-4 h-4 stroke-[3]" />
+                            </span>
+                          </div>
+                        )}
                       </button>
                     );
                   })}
@@ -1239,13 +1144,12 @@ function ExaminationEngineContent() {
                 <div className="mt-6 flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-[#f8f7fe] dark:bg-[#171533] border border-[#e6e3f8] dark:border-[#2c2854] text-[11px] text-[#554e80] dark:text-[#a8a1dc]">
                   <div className="flex items-center gap-1.5 font-medium">
                     <Keyboard className="w-3.5 h-3.5 text-[#6355d8] shrink-0" />
-                    <span className="font-semibold text-[#1d1a4a] dark:text-[#e4e2fd]">Hotkeys:</span>
-                    <span className="hidden sm:inline">Press</span>
+                    <span className="font-semibold text-[#1d1a4a] dark:text-[#e4e2fd]">Keyboard Shortcuts:</span>
                     <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">A</kbd>
                     <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">B</kbd>
                     <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">C</kbd>
                     <kbd className="px-1.5 py-0.5 rounded bg-white dark:bg-[#232049] border border-[#d5d0f5] dark:border-[#383366] font-mono text-[10px] font-bold text-[#1d1a4a] dark:text-[#d6d2fc]">D</kbd>
-                    <span className="text-[#8881b8] dark:text-[#7d76b1]">or 1-4 to select</span>
+                    <span className="text-[#8881b8] dark:text-[#7d76b1]">to select</span>
                   </div>
                   <div className="flex items-center gap-2 font-mono text-[10px] text-[#7871a8] dark:text-[#a59ed8]">
                     <span>[P/←] Prev</span>
@@ -1272,35 +1176,15 @@ function ExaminationEngineContent() {
                       <span>Clear Response</span>
                       <kbd className="hidden sm:inline px-1 py-0.2 rounded bg-black/5 dark:bg-white/10 text-[9px] font-mono">Del</kbd>
                     </Button>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (!currentQuestion) return;
-                        setConfirmedQuestions((prev) => ({ ...prev, [currentQuestion.id]: true }));
-                        toast.success(`Question ${currentIndex + 1} choice confirmed & preserved in local storage.`);
-                      }}
-                      disabled={!currentAnswer?.selected_option}
-                      className={cn(
-                        'text-xs font-mono gap-1.5 border-[#e6e3f8] dark:border-[#2c2854]',
-                        confirmedQuestions[currentQuestion?.id]
-                          ? 'text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-700'
-                          : 'text-[#554e80] dark:text-[#a8a1dc] hover:bg-[#f0effe] dark:hover:bg-[#232049]'
-                      )}
-                    >
-                      <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{confirmedQuestions[currentQuestion?.id] ? 'Confirmed' : 'Confirm Choice'}</span>
-                    </Button>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <Button
                       variant="outline"
-                      size="sm"
+                      size="md"
                       disabled={currentIndex === 0}
                       onClick={() => setCurrentIndex((prev) => prev - 1)}
-                      className="gap-1.5 border-[#e6e3f8] dark:border-[#2c2854] text-[#1d1a4a] dark:text-[#e4e2fd] hover:bg-[#f0effe] dark:hover:bg-[#232049]"
+                      className="gap-1.5 border-[#e6e3f8] dark:border-[#2c2854] text-[#1d1a4a] dark:text-[#e4e2fd] hover:bg-[#f0effe] dark:hover:bg-[#232049] px-5"
                     >
                       <ChevronLeft className="w-4 h-4" />
                       <span>Previous</span>
@@ -1309,10 +1193,10 @@ function ExaminationEngineContent() {
 
                     <Button
                       variant="primary"
-                      size="sm"
+                      size="md"
                       disabled={currentIndex === questions.length - 1}
                       onClick={() => setCurrentIndex((prev) => prev + 1)}
-                      className="gap-1.5 bg-[#1d1a4a] hover:bg-[#2d2870] dark:bg-[#b8b3ff] dark:hover:bg-[#cfcbff] text-white dark:text-[#0d0c1d] font-semibold shadow-[0_2px_8px_rgba(29,26,74,0.16)]"
+                      className="gap-1.5 bg-[#1d1a4a] hover:bg-[#2d2870] dark:bg-[#b8b3ff] dark:hover:bg-[#cfcbff] text-white dark:text-[#0d0c1d] font-semibold shadow-[0_2px_8px_rgba(29,26,74,0.16)] px-6"
                     >
                       <span>Next</span>
                       <kbd className="hidden sm:inline px-1.5 py-0.5 rounded bg-white/20 dark:bg-black/20 text-[9px] font-mono">N</kbd>
@@ -1331,57 +1215,34 @@ function ExaminationEngineContent() {
         </main>
 
         {/* ========================================================= */}
-        {/* RIGHT COLUMN: TIMER, DETAILS & PALETTE (4 OF 12 COLS)     */}
+        {/* RIGHT COLUMN: PALETTE & STATUS (SPACIOUS, NO CRAMPING)    */}
         {/* ========================================================= */}
-        <aside className="hidden lg:flex lg:col-span-4 flex-col gap-4 sticky top-24">
-          {/* Authoritative Timer & Stage Card */}
-          <Card className="p-5 border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-[0_4px_24px_rgba(184,179,255,0.08)]">
-            <div className="flex items-center justify-between pb-3 border-b border-[#e6e3f8] dark:border-[#2c2854]">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-[#7871a8] dark:text-[#a59ed8]">
-                Time Remaining
-              </span>
-              <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-[#f0effe] dark:bg-[#232049] text-[#1d1a4a] dark:text-[#e4e2fd] border border-[#d5d0f5] dark:border-[#383366]">
-                Round {roundNum}
-              </span>
-            </div>
-
-            <div
-              className={cn(
-                'flex items-center gap-2.5 font-mono text-3xl font-bold tracking-tight my-3',
-                isLowTime ? 'text-rose-600 animate-pulse' : 'text-[#1d1a4a] dark:text-[#f4f3ff]'
-              )}
-            >
-              <Clock className={cn('w-7 h-7', isLowTime ? 'text-rose-600' : 'text-[#6355d8] dark:text-[#b8b3ff]')} />
-              <span>{formatTimeRemaining(secondsRemaining)}</span>
-            </div>
-
-            <div className="space-y-1.5 pt-2 border-t border-[#e6e3f8] dark:border-[#2c2854] text-xs text-[#554e80] dark:text-[#a8a1dc]">
-              <div className="flex justify-between">
-                <span className="text-[#8881b8] dark:text-[#7d76b1]">Candidate:</span>
-                <strong className="text-[#1d1a4a] dark:text-[#f4f3ff]">{student?.full_name}</strong>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#8881b8] dark:text-[#7d76b1]">ID / Roll:</span>
-                <span className="font-mono text-[#1d1a4a] dark:text-[#e4e2fd]">{student?.roll_number}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#8881b8] dark:text-[#7d76b1]">Pass Criteria:</span>
-                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+        <aside className="hidden lg:flex lg:col-span-4 xl:col-span-4 2xl:col-span-3 flex-col gap-4 sticky top-20">
+          <Card className="p-5 border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-[0_4px_24px_rgba(184,179,255,0.08)] space-y-4">
+            {/* Top Pass Criteria & Candidate Info */}
+            <div className="pb-3 border-b border-[#e6e3f8] dark:border-[#2c2854] space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">Pass Criteria</span>
+                <span className="font-mono font-semibold text-emerald-600 dark:text-emerald-400">
                   {currentRound?.qualifying_marks} / {currentRound?.total_marks} marks
                 </span>
               </div>
-            </div>
-          </Card>
-
-          {/* Questions Completed & Question Palette */}
-          <Card className="p-5 border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] shadow-[0_4px_24px_rgba(184,179,255,0.08)] space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase font-bold tracking-wider text-[#7871a8] dark:text-[#a59ed8]">
-                  Questions Completed
+              <div className="flex items-center justify-between text-[11px] text-[#706b9b] dark:text-[#a4a0c8]">
+                <span>Candidate</span>
+                <span className="truncate max-w-[140px] font-medium text-gray-700 dark:text-gray-300">
+                  {student?.full_name || 'Candidate'}
                 </span>
-                <span className="text-xs font-mono font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">
-                  {answeredCount} / {questions.length}
+              </div>
+            </div>
+
+            {/* Questions Progress Breakdown */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5 text-xs">
+                <span className="font-bold uppercase tracking-wider text-[#7871a8] dark:text-[#a59ed8] text-[10px]">
+                  Progress
+                </span>
+                <span className="font-mono font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">
+                  {answeredCount} / {questions.length} answered
                 </span>
               </div>
 
@@ -1393,40 +1254,44 @@ function ExaminationEngineContent() {
                 />
               </div>
 
-              {/* Breakdown */}
-              <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs pt-2.5 border-t border-[#e6e3f8] dark:border-[#2c2854]">
-                <div className="p-1 rounded bg-[#f5f4ff] dark:bg-[#1e1b3a] border border-[#e6e3f8] dark:border-[#2c2854]">
-                  <span className="text-[10px] uppercase text-[#7871a8] dark:text-[#a59ed8] block font-semibold">Done</span>
-                  <span className="font-bold text-[#1d1a4a] dark:text-[#f4f3ff]">{answeredCount}</span>
+              {/* Breakdown Status Pills */}
+              <div className="grid grid-cols-3 gap-2 mt-3 text-center text-xs">
+                <div className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800">
+                  <span className="text-[10px] uppercase text-emerald-700 dark:text-emerald-300 block font-semibold">Done</span>
+                  <span className="font-bold text-emerald-800 dark:text-emerald-200">{answeredCount}</span>
                 </div>
-                <div className="p-1 rounded bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/30">
-                  <span className="text-[10px] uppercase text-rose-500 block font-semibold">Left</span>
-                  <span className="font-bold text-rose-600 dark:text-rose-400">{unansweredCount}</span>
+                <div className="p-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800">
+                  <span className="text-[10px] uppercase text-rose-600 dark:text-rose-400 block font-semibold">Left</span>
+                  <span className="font-bold text-rose-700 dark:text-rose-300">{unansweredCount}</span>
                 </div>
-                <div className="p-1 rounded bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30">
-                  <span className="text-[10px] uppercase text-amber-600 block font-semibold">Review</span>
-                  <span className="font-bold text-amber-600 dark:text-amber-400">{markedReviewCount}</span>
+                <div className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800">
+                  <span className="text-[10px] uppercase text-amber-600 dark:text-amber-400 block font-semibold">Review</span>
+                  <span className="font-bold text-amber-700 dark:text-amber-300">{markedReviewCount}</span>
                 </div>
               </div>
             </div>
 
-            {/* Palette Grid */}
+            {/* Question Palette Grid - Full Visibility without Cramped Box */}
             <div className="pt-3 border-t border-[#e6e3f8] dark:border-[#2c2854]">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-[#1d1a4a] dark:text-[#f4f3ff] mb-3">
-                Question Palette
-              </h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-[#1d1a4a] dark:text-[#f4f3ff]">
+                  Question Palette
+                </h3>
+                <span className="text-[11px] font-mono text-gray-400">
+                  {questions.length} Questions
+                </span>
+              </div>
 
-              <div className="grid grid-cols-5 gap-2 max-h-56 overflow-y-auto pr-1">
+              <div className="grid grid-cols-6 xl:grid-cols-6 2xl:grid-cols-8 gap-2 max-h-[calc(100vh-340px)] overflow-y-auto pr-1">
                 {questions.map((q, idx) => {
                   const ans = answers[q.id];
                   const isAnswered = Boolean(ans?.selected_option || (ans?.code_snippet && ans.code_snippet.trim().length > 10));
                   const isMarked = Boolean(ans?.is_marked_for_review);
                   const isCurrent = idx === currentIndex;
-                  const isSynced = questionSyncMap[q.id] === 'synced';
 
                   let btnStyle = 'border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] text-[#1d1a4a] dark:text-[#f4f3ff] hover:border-[#b8b3ff]';
                   if (isMarked) {
-                    btnStyle = 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-semibold';
+                    btnStyle = 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-bold';
                   } else if (isAnswered) {
                     btnStyle = 'border-[#1d1a4a] dark:border-[#b8b3ff] bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] font-bold shadow-xs';
                   }
@@ -1436,40 +1301,53 @@ function ExaminationEngineContent() {
                       key={q.id}
                       onClick={() => setCurrentIndex(idx)}
                       className={cn(
-                        'relative h-9 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
+                        'relative h-10 rounded-lg border text-xs font-mono transition-all flex items-center justify-center cursor-pointer',
                         btnStyle,
-                        isCurrent && 'ring-2 ring-[#6355d8] dark:ring-[#b8b3ff] ring-offset-1 font-bold'
+                        isCurrent && 'ring-2 ring-[#6355d8] dark:ring-[#b8b3ff] ring-offset-2 font-black scale-105 z-10'
                       )}
                     >
                       <span>{idx + 1}</span>
-                      {isAnswered && (
-                        <span
-                          className={cn(
-                            'absolute top-1 right-1 w-1.5 h-1.5 rounded-full',
-                            isSynced ? 'bg-emerald-400' : 'bg-slate-300'
-                          )}
-                          title={isSynced ? 'Cloud Synced' : 'Saved to Device'}
-                        />
+                      {isAnswered && !isMarked && (
+                        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      )}
+                      {isMarked && (
+                        <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500" />
                       )}
                     </button>
                   );
                 })}
               </div>
+
+              {/* Clean Legend */}
+              <div className="flex items-center justify-between pt-3 mt-3 border-t border-[#e6e3f8] dark:border-[#2c2854] text-[10px] text-[#706b9b] dark:text-[#a4a0c8]">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-[#1d1a4a] dark:bg-[#b8b3ff]" />
+                  <span>Answered</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm bg-amber-400" />
+                  <span>Review</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-sm border border-gray-300 bg-white" />
+                  <span>Unanswered</span>
+                </div>
+              </div>
             </div>
 
-            {/* Submit Action */}
+            {/* Submit Action at Bottom of Sidebar */}
             <div className="pt-2">
               <Button
                 variant={isSubmitLocked ? 'outline' : 'primary'}
-                size="sm"
+                size="md"
                 disabled={isSubmitLocked}
                 onClick={() => setSubmitModalOpen(true)}
-                className="w-full text-xs font-semibold uppercase tracking-wider h-10 font-mono"
+                className="w-full text-xs font-bold uppercase tracking-wider h-11"
               >
                 {isSubmitLocked ? (
                   <span>Unlocks in {formatTimeRemaining(submitLockRemaining)}</span>
                 ) : (
-                  <span>Review & Submit Round</span>
+                  <span>Submit Round</span>
                 )}
               </Button>
             </div>
@@ -1487,17 +1365,16 @@ function ExaminationEngineContent() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="grid grid-cols-5 gap-2 my-6 overflow-y-auto">
+            <div className="grid grid-cols-6 gap-2 my-6 overflow-y-auto max-h-[60vh]">
               {questions.map((q, idx) => {
                 const ans = answers[q.id];
                 const isAnswered = Boolean(ans?.selected_option || (ans?.code_snippet && ans.code_snippet.trim().length > 10));
                 const isMarked = Boolean(ans?.is_marked_for_review);
                 const isCurrent = idx === currentIndex;
-                const isSynced = questionSyncMap[q.id] === 'synced';
 
                 let btnStyle = 'border-[#e6e3f8] dark:border-[#2c2854] bg-white dark:bg-[#15132d] text-[#1d1a4a] dark:text-[#f4f3ff]';
                 if (isMarked) {
-                  btnStyle = 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-semibold';
+                  btnStyle = 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 font-bold';
                 } else if (isAnswered) {
                   btnStyle = 'border-[#1d1a4a] dark:border-[#b8b3ff] bg-[#1d1a4a] dark:bg-[#b8b3ff] text-white dark:text-[#0d0c1d] font-bold shadow-xs';
                 }
@@ -1510,19 +1387,17 @@ function ExaminationEngineContent() {
                       setMobilePaletteOpen(false);
                     }}
                     className={cn(
-                      'relative h-11 rounded-lg border text-xs font-mono flex items-center justify-center',
+                      'relative h-11 rounded-lg border text-xs font-mono flex items-center justify-center cursor-pointer',
                       btnStyle,
-                      isCurrent && 'ring-2 ring-[#6355d8] dark:ring-[#b8b3ff]'
+                      isCurrent && 'ring-2 ring-[#6355d8] dark:ring-[#b8b3ff] font-bold'
                     )}
                   >
                     <span>{idx + 1}</span>
-                    {isAnswered && (
-                      <span
-                        className={cn(
-                          'absolute top-1 right-1 w-1.5 h-1.5 rounded-full',
-                          isSynced ? 'bg-emerald-400' : 'bg-slate-300'
-                        )}
-                      />
+                    {isAnswered && !isMarked && (
+                      <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    )}
+                    {isMarked && (
+                      <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500" />
                     )}
                   </button>
                 );
