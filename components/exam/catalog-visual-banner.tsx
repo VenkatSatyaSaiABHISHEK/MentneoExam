@@ -1,11 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import type { AnimationItem } from 'lottie-web';
+
+// Resilient type interface so compilation never fails even if lottie-web types are not in node_modules
+interface LottieAnimation {
+  destroy: () => void;
+  addEventListener: (name: string, callback: () => void) => void;
+}
 
 export function CatalogVisualBanner() {
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const animRef = React.useRef<AnimationItem | null>(null);
+  const animRef = React.useRef<LottieAnimation | null>(null);
   const [isLoaded, setIsLoaded] = React.useState(false);
 
   React.useEffect(() => {
@@ -14,8 +19,10 @@ export function CatalogVisualBanner() {
     async function initLottie() {
       if (!containerRef.current) return;
       try {
-        const lottie = (await import('lottie-web')).default;
-        if (!isMounted || !containerRef.current) return;
+        // @ts-ignore dynamic import for lottie-web
+        const lottieImport: any = await import('lottie-web').catch(() => null);
+        const lottie: any = lottieImport?.default || lottieImport;
+        if (!lottie || !isMounted || !containerRef.current) return;
 
         if (animRef.current) {
           animRef.current.destroy();
