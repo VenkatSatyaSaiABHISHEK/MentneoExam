@@ -217,9 +217,47 @@ function ExaminationEngineContent() {
         const lockSecs = Math.max(0, minSubmitMinutes * 60 - elapsedSecs);
         setSubmitLockRemaining(lockSecs);
 
-        if (att.status === 'submitted' || att.status === 'timed_out' || att.status === 'terminated') {
+        if (att.status === 'submitted' || att.status === 'timed_out' || att.status === 'terminated' || secRem <= 0) {
+          toast.info('Examination time has expired. Submitting answers...');
           router.push(`/exam/${slug}/result?attemptId=${att.id}`);
           return;
+        }
+
+        // Check if candidate previously started this attempt, left, and is now re-joining
+        const isAiTabAllowed = round.allow_tab_switch === true;
+        if (typeof window !== 'undefined' && !isAiTabAllowed && elapsedSecs > 10) {
+          const wasActive = sessionStorage.getItem(`active_session_${att.id}`);
+          if (!wasActive) {
+            // Student closed browser or navigated away earlier and now rejoined
+            sessionStorage.setItem(`active_session_${att.id}`, 'true');
+            // Log infraction on server and display warning modal to student
+            fetch(`/api/attempts/${att.id}/cheating-event`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                violationType: 'session_rejoined',
+                metadata: { elapsedSecs, timestamp: new Date().toISOString() },
+              }),
+            })
+              .then((r) => r.json())
+              .then((j) => {
+                if (j.success && j.data) {
+                  setCurrentWarning(j.data.warningNumber);
+                  setMaxWarnings(j.data.maxWarnings);
+                  setViolationReason('You previously left the examination session and rejoined. The timer continued running while you were away.');
+                  setWarningModalOpen(true);
+                  if (j.data.isTerminated) {
+                    setIsTerminated(true);
+                    setTimeout(() => {
+                      router.push(`/exam/${slug}/result?attemptId=${att.id}`);
+                    }, 2500);
+                  }
+                }
+              })
+              .catch(() => {});
+          }
+        } else if (typeof window !== 'undefined') {
+          sessionStorage.setItem(`active_session_${att.id}`, 'true');
         }
 
         // Trigger Pre-Round Briefing for Coding rounds (Round 3)

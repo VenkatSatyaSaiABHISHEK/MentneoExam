@@ -42,8 +42,8 @@ function StudentResultContent() {
   const [currentRound, setCurrentRound] = React.useState<ExaminationRound | null>(null);
   const [student, setStudent] = React.useState<Student | null>(null);
 
-  // 2-minute countdown timer before automatic transition
-  const [countdownSeconds, setCountdownSeconds] = React.useState<number>(120);
+  // 1-minute (60 seconds) countdown timer before automatic transition to next round
+  const [countdownSeconds, setCountdownSeconds] = React.useState<number>(60);
   const [readinessModalOpen, setReadinessModalOpen] = React.useState(false);
   const [readinessAgreed, setReadinessAgreed] = React.useState(false);
   const [certModalOpen, setCertModalOpen] = React.useState(false);
@@ -140,14 +140,17 @@ function StudentResultContent() {
     loadResult();
   }, [slug, attemptId]);
 
-  // Live countdown timer for qualified students
+  // Live 1-minute countdown timer for qualified students
   React.useEffect(() => {
     if (!result?.is_qualified || !qualification?.next_round_number) return;
 
+    const nextRoundNum = qualification.next_round_number;
     const timer = setInterval(() => {
       setCountdownSeconds((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
+          // Auto-start next round after 1 minute countdown
+          router.push(`/exam/${slug}/round/${nextRoundNum}`);
           return 0;
         }
         return prev - 1;
@@ -155,7 +158,7 @@ function StudentResultContent() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [result, qualification]);
+  }, [result, qualification, router, slug]);
 
   if (loading) {
     return (
@@ -244,15 +247,25 @@ function StudentResultContent() {
 
           {/* Qualified Countdown Notice for Next Round */}
           {isQualified && nextRound && (
-            <div className="mt-6 p-4 rounded-xl border border-emerald-200 bg-emerald-50/60 text-xs text-emerald-950 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-md mx-auto">
+            <div className="mt-6 p-4 rounded-xl border border-emerald-300 bg-emerald-50/80 text-xs text-emerald-950 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-xl mx-auto shadow-xs">
               <div className="flex items-center gap-2">
                 <Clock className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>
-                  Next round: <strong>{nextRound.name}</strong>
+                  Next Round: <strong>Round {nextRound.round_number} ({nextRound.name})</strong>
                 </span>
               </div>
-              <div className="font-mono font-bold text-emerald-800 bg-white px-2.5 py-1 rounded border border-emerald-200">
-                Starts in {formatTimeRemaining(countdownSeconds)}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="font-mono font-bold text-xs text-emerald-800 bg-white px-2.5 py-1 rounded border border-emerald-200">
+                  Starts in {formatTimeRemaining(countdownSeconds)}
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => router.push(`/exam/${slug}/round/${nextRound.round_number}`)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase tracking-wider px-3 h-8 gap-1 cursor-pointer"
+                >
+                  <span>Start Now</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </Button>
               </div>
             </div>
           )}
