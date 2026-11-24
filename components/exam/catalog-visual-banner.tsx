@@ -2,49 +2,102 @@
 
 import * as React from 'react';
 
-// Resilient type interface so compilation never fails even if lottie-web types are not in node_modules
-interface LottieAnimation {
-  destroy: () => void;
-  addEventListener: (name: string, callback: () => void) => void;
+declare global {
+  interface Window {
+    lottie?: any;
+    bodymovin?: any;
+  }
 }
 
 export function CatalogVisualBanner() {
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const animRef = React.useRef<LottieAnimation | null>(null);
-  const [isLoaded, setIsLoaded] = React.useState(false);
+  const animRef = React.useRef<any>(null);
 
   React.useEffect(() => {
     let isMounted = true;
 
-    async function initLottie() {
+    async function initAnimation() {
       if (!containerRef.current) return;
-      try {
-        // @ts-ignore dynamic import for lottie-web
-        const lottieImport: any = await import('lottie-web').catch(() => null);
-        const lottie: any = lottieImport?.default || lottieImport;
-        if (!lottie || !isMounted || !containerRef.current) return;
 
-        if (animRef.current) {
-          animRef.current.destroy();
+      // 1. Ensure Lottie engine runtime is available
+      let lottie = window.lottie || window.bodymovin;
+
+      if (!lottie) {
+        try {
+          // @ts-ignore
+          const mod = await import('lottie-web').catch(() => null);
+          lottie = mod?.default || mod;
+        } catch {
+          // Fallback to CDN script
         }
+      }
 
-        const anim = lottie.loadAnimation({
-          container: containerRef.current,
-          renderer: 'svg',
-          loop: true,
-          autoplay: true,
-          path: '/animations/exam-hero.json',
+      if (!lottie && typeof document !== 'undefined') {
+        await new Promise<void>((resolve) => {
+          const existing = document.getElementById('lottie-cdn-player');
+          if (existing) {
+            existing.addEventListener('load', () => resolve());
+            setTimeout(resolve, 1200);
+            return;
+          }
+          const s = document.createElement('script');
+          s.id = 'lottie-cdn-player';
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.12.2/lottie.min.js';
+          s.async = true;
+          s.onload = () => resolve();
+          s.onerror = () => resolve();
+          document.head.appendChild(s);
         });
+        lottie = window.lottie || window.bodymovin;
+      }
 
-        animRef.current = anim;
+      if (!isMounted || !containerRef.current) return;
 
-        anim.addEventListener('DOMLoaded', () => {
-          if (isMounted) setIsLoaded(true);
-        });
+      // 2. Fetch animation JSON directly for instant synchronous SVG rendering
+      let animationData: any = null;
+      try {
+        const localRes = await fetch('/animations/exam-hero.json');
+        if (localRes.ok) {
+          animationData = await localRes.json();
+        }
+      } catch (err) {
+        console.warn('[Lottie] Local fetch failed, trying remote host:', err);
+      }
 
-        anim.addEventListener('data_failed', () => {
-          if (!isMounted || !containerRef.current) return;
-          anim.destroy();
+      if (!animationData) {
+        try {
+          const remoteRes = await fetch(
+            'https://lottie.host/1a80990e-efb1-40c4-b540-47fe4864dd09/5xSGHyLQDz.json'
+          );
+          if (remoteRes.ok) {
+            animationData = await remoteRes.json();
+          }
+        } catch (err) {
+          console.warn('[Lottie] Remote host fetch failed:', err);
+        }
+      }
+
+      if (!isMounted || !containerRef.current || !lottie) return;
+
+      // Clear any prior instance
+      if (animRef.current) {
+        try {
+          animRef.current.destroy();
+        } catch {}
+        animRef.current = null;
+      }
+
+      try {
+        if (animationData) {
+          animRef.current = lottie.loadAnimation({
+            container: containerRef.current,
+            renderer: 'svg',
+            loop: true,
+            autoplay: true,
+            animationData,
+          });
+        } else {
+          // Fallback to path if fetch failed
           animRef.current = lottie.loadAnimation({
             container: containerRef.current,
             renderer: 'svg',
@@ -52,41 +105,32 @@ export function CatalogVisualBanner() {
             autoplay: true,
             path: 'https://lottie.host/1a80990e-efb1-40c4-b540-47fe4864dd09/5xSGHyLQDz.json',
           });
-        });
+        }
       } catch (err) {
-        console.error('Failed to initialize Lottie animation:', err);
+        console.error('[Lottie] Failed to render animation:', err);
       }
     }
 
-    initLottie();
+    initAnimation();
 
     return () => {
       isMounted = false;
       if (animRef.current) {
-        animRef.current.destroy();
+        try {
+          animRef.current.destroy();
+        } catch {}
         animRef.current = null;
       }
     };
   }, []);
 
   return (
-    <div className="relative w-full max-w-lg mx-auto select-none">
-      {/* Ambient gradient glow in Sakuga palette */}
-      <div className="absolute -inset-4 bg-gradient-to-tr from-[#edeaff] via-[#b8b3ff]/30 to-[#faf9fe] dark:from-[#1e1b3d] dark:via-[#635bff]/20 dark:to-[#0d0c1d] rounded-3xl blur-2xl opacity-70 -z-10" />
-
-      {/* Main Visual Frame with Lottie Animation */}
-      <div className="relative rounded-2xl border border-[#e6e3f8] dark:border-[#2c2854] bg-white/80 dark:bg-[#15132d]/80 backdrop-blur-md p-4 sm:p-6 shadow-[0_8px_32px_rgba(184,179,255,0.14)] overflow-hidden transition-all flex flex-col items-center justify-center min-h-[300px]">
-        {!isLoaded && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/40 dark:bg-[#15132d]/40">
-            <div className="w-10 h-10 border-2 border-[#635bff] border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
-        <div
-          ref={containerRef}
-          className="w-full h-auto max-w-[460px] flex items-center justify-center transition-opacity duration-300"
-          style={{ opacity: isLoaded ? 1 : 0 }}
-        />
-      </div>
+    <div className="w-full flex items-center justify-center select-none">
+      {/* Seamless, transparent container without any card border or background box */}
+      <div
+        ref={containerRef}
+        className="w-full max-w-[480px] h-[340px] sm:h-[380px] flex items-center justify-center pointer-events-none"
+      />
     </div>
   );
 }
