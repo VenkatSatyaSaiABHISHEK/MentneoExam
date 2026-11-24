@@ -8,19 +8,79 @@ export interface ParsedQuestionItem {
   difficulty?: Difficulty;
 }
 
+function decodeAscii85(str: string): Buffer {
+  let clean = str.replace(/\s+/g, '');
+  if (clean.startsWith('<~')) clean = clean.slice(2);
+  const endIdx = clean.indexOf('~>');
+  if (endIdx !== -1) clean = clean.slice(0, endIdx);
+
+  const out: number[] = [];
+  let tuple = 0;
+  let count = 0;
+
+  for (let i = 0; i < clean.length; i++) {
+    const c = clean.charCodeAt(i);
+    if (clean[i] === 'z' && count === 0) {
+      out.push(0, 0, 0, 0);
+      continue;
+    }
+    if (c < 33 || c > 117) continue;
+
+    tuple = tuple * 85 + (c - 33);
+    count++;
+
+    if (count === 5) {
+      out.push(
+        (tuple >>> 24) & 0xff,
+        (tuple >>> 16) & 0xff,
+        (tuple >>> 8) & 0xff,
+        tuple & 0xff
+      );
+      tuple = 0;
+      count = 0;
+    }
+  }
+
+  if (count > 0) {
+    for (let i = count; i < 5; i++) {
+      tuple = tuple * 85 + 84;
+    }
+    for (let i = 0; i < count - 1; i++) {
+      out.push((tuple >>> (24 - i * 8)) & 0xff);
+    }
+  }
+
+  return Buffer.from(out);
+}
+
 function decompressBuffer(rawStream: Buffer): string {
+  // 1. Try standard Flate
   try {
     return zlib.inflateSync(rawStream).toString('utf-8');
-  } catch {
-    try {
-      return zlib.inflateRawSync(rawStream).toString('utf-8');
-    } catch {
+  } catch {}
+
+  // 2. Try raw deflate without zlib headers
+  try {
+    return zlib.inflateRawSync(rawStream).toString('utf-8');
+  } catch {}
+
+  // 3. Try ASCII85 + Flate (Common in ReportLab, Acrobat, and Linux PDF tools)
+  try {
+    const a85Decoded = decodeAscii85(rawStream.toString('binary'));
+    if (a85Decoded.length > 0) {
       try {
-        return zlib.unzipSync(rawStream).toString('utf-8');
+        return zlib.inflateSync(a85Decoded).toString('utf-8');
       } catch {
-        return rawStream.toString('utf-8');
+        return zlib.inflateRawSync(a85Decoded).toString('utf-8');
       }
     }
+  } catch {}
+
+  // 4. Try gzip unzip
+  try {
+    return zlib.unzipSync(rawStream).toString('utf-8');
+  } catch {
+    return rawStream.toString('utf-8');
   }
 }
 
@@ -67,73 +127,83 @@ export function extractRawTextFromPdf(buffer: Buffer): string {
   }
 
   // 2. Second pass: extract text from streams, respecting line break operators
-  streamRegex.lastIndex = 0;
-  while ((match = streamRegex.exec(content)) !== null) {
-    const rawStream = Buffer.from(match[1], 'binary');
+  let searchIdx = 0;
+  while (true) {
+    const streamStart = content.indexOf('stream', searchIdx);
+    if (streamStart === -1) break;
+
+    let dataStart = streamStart + 6;
+    if (content[dataStart] === '\r') dataStart++;
+    if (content[dataStart] === '\n') dataStart++;
+
+    const streamEnd = content.indexOf('endstream', dataStart);
+    if (streamEnd === -1) break;
+
+    const rawStream = Buffer.from(content.slice(dataStart, streamEnd), 'binary');
     try {
       const decStr = decompressBuffer(rawStream);
-
-      // Convert PDF newline operators (T*, TD, Td with negative y, ET) to actual newlines
-      const normalizedStream = decStr
-        .replace(/(?:T\*|\bET\b|(?:\-?\d+(?:\.\d+)?\s+\-\d+(?:\.\d+)?\s+T[Dd]))/g, '\n');
 
       // Extract text from (text) Tj operators
       const tjRegex = /\(([\s\S]*?)\)\s*T[jJ]/g;
       let tj: RegExpExecArray | null;
-      while ((tj = tjRegex.exec(normalizedStream)) !== null) {
-        fullText += tj[1] + ' ';
+      while ((tj = tjRegex.exec(decStr)) !== null) {
+        fullText += '\n' + tj[1];
       }
 
       // Extract text from [(text1) 20 (text2)] TJ array operators (multi-line supported)
       const tjArrayRegex = /\[([\s\S]*?)\]\s*TJ/gi;
       let tjArr: RegExpExecArray | null;
-      while ((tjArr = tjArrayRegex.exec(normalizedStream)) !== null) {
+      while ((tjArr = tjArrayRegex.exec(decStr)) !== null) {
         const inner = tjArr[1];
         const innerTextRegex = /\(([\s\S]*?)\)/g;
         let it: RegExpExecArray | null;
+        let line = '';
         while ((it = innerTextRegex.exec(inner)) !== null) {
-          fullText += it[1];
+          line += it[1];
         }
-        fullText += ' ';
+        fullText += '\n' + line;
       }
 
       // Extract text from ' (text)' line-feed operators
       const singleQuoteRegex = /\(([\s\S]*?)\)\s*'/g;
       let sq: RegExpExecArray | null;
-      while ((sq = singleQuoteRegex.exec(normalizedStream)) !== null) {
-        fullText += '\n' + sq[1] + ' ';
+      while ((sq = singleQuoteRegex.exec(decStr)) !== null) {
+        fullText += '\n' + sq[1];
       }
 
       // Extract hexadecimal <hex> Tj decoded with CMap
       if (cmap.size > 0) {
         const hexTjRegex = /<([0-9A-Fa-f]+)>\s*T[jJ]/g;
         let htj: RegExpExecArray | null;
-        while ((htj = hexTjRegex.exec(normalizedStream)) !== null) {
+        while ((htj = hexTjRegex.exec(decStr)) !== null) {
           const hex = htj[1];
           let decoded = '';
           for (let i = 0; i < hex.length; i += 4) {
             const code = hex.slice(i, i + 4).toUpperCase().padStart(4, '0');
             decoded += cmap.get(code) || '';
           }
-          fullText += decoded + ' ';
+          fullText += '\n' + decoded;
         }
       }
-      fullText += '\n';
     } catch {
       // Ignore uncompressed images or non-text streams
     }
+
+    searchIdx = streamEnd + 9;
   }
 
   // 3. Search uncompressed literal text as fallback
   const literalTj = /\(([\s\S]*?)\)\s*T[jJ]/g;
   let lit: RegExpExecArray | null;
   while ((lit = literalTj.exec(content)) !== null) {
-    fullText += lit[1] + ' ';
+    fullText += '\n' + lit[1];
   }
 
   // Clean PDF escape sequences and format clean line breaks
   return fullText
     .replace(/\\([()\\])/g, '$1')
+    .replace(/\\226/g, '-')
+    .replace(/\\222/g, "'")
     .replace(/[ \t]+/g, ' ')
     .replace(/\n\s+/g, '\n')
     .trim();
@@ -162,8 +232,11 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
 
   // 2. Normalize text and split into question blocks
   const normalized = '\n' + text.trim();
-  // Split on: \n 1. or \n Q1. or \n Question 1: or \n 1) or \n [1]
-  const qSplitRegex = /(?:\r?\n|\r)\s*(?:(?:Question|Q)\s*[\.\:\-]?\s*)?(\d{1,3})[\.\:\)\-]\s+/gi;
+  const hasQPrefix = /(?:\r?\n|\r)\s*Q\d{1,3}[\.\:\)\-]/i.test(normalized);
+  const qSplitRegex = hasQPrefix
+    ? /(?:\r?\n|\r)\s*(?:Question|Q)\s*[\.\:\-]?\s*(\d{1,3})[\.\:\)\-]\s*/gi
+    : /(?:\r?\n|\r)\s*(?:(?:Question|Q)\s*[\.\:\-]?\s*)?(\d{1,3})[\.\:\)\-]\s*/gi;
+
   const rawParts: { num: number; content: string }[] = [];
 
   let qMatch: RegExpExecArray | null;
@@ -190,7 +263,7 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
     if (content.length < 5) continue;
 
     // Check if this block contains options (A) (B) (C) (D) or (a) (b) (c) (d) or A. B. C. D. or A) B) C) D)
-    const optSplitRegex = /(?:\r?\n|\s{2,}|\t|^)\s*(?:\(?([a-dA-D])[\)\.\:\-]|\[([a-dA-D])\])\s+/gi;
+    const optSplitRegex = /(?:\r?\n|\s{2,}|\t|^)\s*(?:\(?([a-dA-D])[\)\.\:\-]|\[([a-dA-D])\])\s*/gi;
     const optMatches = Array.from(content.matchAll(optSplitRegex));
 
     let questionStatement = '';
@@ -224,7 +297,7 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
       const nonOptLines: string[] = [];
 
       for (const line of lines) {
-        const singleOptMatch = line.match(/^[\(\[]?([a-dA-D])[\)\]\.\:\-]\s+(.*)$/i);
+        const singleOptMatch = line.match(/^[\(\[]?([a-dA-D])[\)\]\.\:\-]\s*(.*)$/i);
         if (singleOptMatch) {
           const l = singleOptMatch[1].toUpperCase();
           let optVal = singleOptMatch[2].trim();
@@ -252,12 +325,17 @@ export function parseQuestionsFromText(text: string): ParsedQuestionItem[] {
       'A';
 
     // Clean question statement
-    const cleanedQ = questionStatement
+    let cleanedQ = questionStatement
       .replace(/(?:Answer|Ans|Correct(?:\s*Option)?)\s*[:.\-]?\s*\(?[a-dA-D]\)?.*$/gim, '')
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (cleanedQ.length > 5 && (optionMap['A'] || optionMap['B'])) {
+    // If question statement is empty (e.g. Odd One Out section Q26-Q35)
+    if (cleanedQ.length === 0) {
+      cleanedQ = 'Find the odd one out among the given options:';
+    }
+
+    if (optionMap['A'] || optionMap['B']) {
       questions.push({
         question_text: cleanedQ,
         options: [
