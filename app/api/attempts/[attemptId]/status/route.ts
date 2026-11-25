@@ -16,6 +16,19 @@ export async function GET(
     const deadline = new Date(attempt.deadline_at).getTime();
     const secondsRemaining = attempt.status === 'in_progress' ? Math.max(0, Math.floor((deadline - now) / 1000)) : 0;
 
+    let emergencyAnnouncement: string | null = null;
+    let isExamPaused = false;
+    try {
+      const round = await db.getRoundById(attempt.round_id);
+      if (round) {
+        const exam = await db.getExaminationById(round.examination_id);
+        if (exam) {
+          emergencyAnnouncement = exam.emergency_announcement || null;
+          isExamPaused = exam.status === 'paused';
+        }
+      }
+    } catch {}
+
     return NextResponse.json({
       success: true,
       data: {
@@ -23,6 +36,8 @@ export async function GET(
         secondsRemaining,
         cheatingWarnings: attempt.cheating_warnings,
         isExpired: secondsRemaining <= 0 && attempt.status === 'in_progress',
+        emergencyAnnouncement,
+        isExamPaused,
       },
     });
   } catch (error: unknown) {

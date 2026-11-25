@@ -35,23 +35,37 @@ export async function POST(
       );
     }
 
-    // Check if this candidate already has completed attempts (prevent rewriting)
+    if (verification.examination?.admission_locked) {
+      return NextResponse.json(
+        {
+          success: false,
+          verified: false,
+          admissionLocked: true,
+          error: 'Candidate admission is currently closed by the exam administrator. Please wait for the proctor to open entry.',
+        },
+        { status: 403 }
+      );
+    }
+
+    // Authoritative candidate multi-round progression check
     let hasCompletedAttempt = false;
     let completedAttemptId: string | null = null;
+    let nextRoute: string | null = null;
+    let progressData: any = null;
     const regId = verification.registration?.id;
 
     if (regId) {
       try {
-        const pool = getPgPool();
-        const { rows } = await pool.query(
-          "SELECT id, status FROM examination_attempts WHERE registration_id = $1 AND status IN ('submitted', 'timed_out', 'terminated') ORDER BY created_at DESC LIMIT 1",
-          [regId]
-        );
-        if (rows.length > 0) {
-          hasCompletedAttempt = true;
-          completedAttemptId = rows[0].id;
-        }
-      } catch {}
+        progressData = await db.getCandidateExamProgress({
+          examId: verification.examination?.id || examId,
+          registrationId: regId,
+        });
+        hasCompletedAttempt = progressData.status === 'eliminated' || progressData.status === 'completed_all';
+        completedAttemptId = progressData.attemptId || null;
+        nextRoute = progressData.route || null;
+      } catch (progErr) {
+        console.warn('[verify-student progression warning]', progErr);
+      }
     }
 
     return NextResponse.json({
@@ -59,17 +73,23 @@ export async function POST(
       verified: true,
       hasCompletedAttempt,
       completedAttemptId,
+      nextRoute,
+      progress: progressData,
       data: {
         student: verification.student,
         registrationId: verification.registration?.id,
         status: verification.registration?.status,
         hasCompletedAttempt,
         completedAttemptId,
+        nextRoute,
+        progress: progressData,
         examination: {
           id: verification.examination?.id,
           name: verification.examination?.name,
           slug: verification.examination?.slug,
           status: verification.examination?.status,
+          admissionLocked: verification.examination?.admission_locked ?? false,
+          emergencyAnnouncement: verification.examination?.emergency_announcement ?? null,
         },
       },
     });

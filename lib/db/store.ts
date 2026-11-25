@@ -1515,6 +1515,208 @@ export const db = {
     return exam;
   },
 
+  async updateExamRemoteSettings(params: {
+    examId: string;
+    admissionLocked?: boolean;
+    status?: ExamStatus;
+    emergencyAnnouncement?: string | null;
+    remotePin?: string;
+  }): Promise<Examination | null> {
+    const exam = store.examinations.get(params.examId) || (await this.getExaminationById(params.examId));
+    if (!exam) return null;
+
+    if (params.admissionLocked !== undefined) exam.admission_locked = params.admissionLocked;
+    if (params.status !== undefined) exam.status = params.status;
+    if (params.emergencyAnnouncement !== undefined) exam.emergency_announcement = params.emergencyAnnouncement;
+    if (params.remotePin !== undefined) exam.remote_pin = params.remotePin;
+    exam.updated_at = new Date().toISOString();
+
+    store.examinations.set(params.examId, exam);
+    resilientStorage.scheduleSave(() => store.toSnapshot());
+
+    try {
+      const pool = getPgPool();
+      await pool.query(
+        'UPDATE examinations SET admission_locked = $1, status = $2, emergency_announcement = $3, remote_pin = $4, updated_at = NOW() WHERE id = $5',
+        [
+          exam.admission_locked ?? false,
+          exam.status,
+          exam.emergency_announcement ?? null,
+          exam.remote_pin ?? '12345678',
+          params.examId,
+        ]
+      );
+    } catch (err) {
+      console.warn('[PostgreSQL updateExamRemoteSettings error]', err);
+    }
+
+    return exam;
+  },
+
+  async getCandidateExamProgress(params: {
+    examId: string;
+    registrationId: string;
+  }): Promise<{
+    currentRoundNumber: number;
+    currentRoundId: string;
+    status: 'not_started' | 'in_progress' | 'waiting_next_round' | 'completed_all' | 'eliminated';
+    route: string;
+    secondsRemaining: number;
+    attemptId?: string;
+    isQualified?: boolean;
+    message?: string;
+  }> {
+    const exam = store.examinations.get(params.examId) || (await this.getExaminationById(params.examId));
+    if (!exam) throw new Error('Examination not found');
+
+    const rounds = await this.getRoundsByExamId(exam.id);
+    rounds.sort((a, b) => a.round_number - b.round_number);
+
+    if (rounds.length === 0) {
+      return {
+        currentRoundNumber: 1,
+        currentRoundId: '',
+        status: 'not_started',
+        route: `/exam/${exam.slug}/instructions`,
+        secondsRemaining: 0,
+      };
+    }
+
+    for (let i = 0; i < rounds.length; i++) {
+      const round = rounds[i];
+      const isFinalRound = i === rounds.length - 1;
+
+      let att = store.attempts.get(store.attemptByRegAndRound?.get(`${params.registrationId}_${round.id}`) || '');
+      if (!att) {
+        try {
+          const pool = getPgPool();
+          const { rows } = await pool.query(
+            'SELECT * FROM examination_attempts WHERE registration_id = $1 AND round_id = $2 LIMIT 1',
+            [params.registrationId, round.id]
+          );
+          if (rows.length > 0) {
+            att = rows[0] as ExaminationAttempt;
+            store.attempts.set(att.id, att);
+          }
+        } catch {}
+      }
+
+      if (!att) {
+        if (i === 0) {
+          return {
+            currentRoundNumber: 1,
+            currentRoundId: round.id,
+            status: 'not_started',
+            route: `/exam/${exam.slug}/instructions`,
+            secondsRemaining: (round.duration_minutes || 20) * 60,
+          };
+        } else {
+          const prevRound = rounds[i - 1];
+          let prevAtt = store.attempts.get(store.attemptByRegAndRound?.get(`${params.registrationId}_${prevRound.id}`) || '');
+          if (!prevAtt) {
+            try {
+              const pool = getPgPool();
+              const { rows } = await pool.query(
+                'SELECT * FROM examination_attempts WHERE registration_id = $1 AND round_id = $2 LIMIT 1',
+                [params.registrationId, prevRound.id]
+              );
+              if (rows.length > 0) prevAtt = rows[0] as ExaminationAttempt;
+            } catch {}
+          }
+          const prevEndTime = prevAtt?.submitted_at ? new Date(prevAtt.submitted_at).getTime() : new Date(prevAtt?.deadline_at || Date.now()).getTime();
+          const delaySec = prevRound.next_round_delay_seconds || 60;
+          const scheduledStartMs = prevEndTime + delaySec * 1000;
+          const scheduledDeadlineMs = scheduledStartMs + (round.duration_minutes || 20) * 60 * 1000;
+          const nowMs = Date.now();
+
+          if (nowMs < scheduledStartMs) {
+            const secRem = Math.max(0, Math.floor((scheduledStartMs - nowMs) / 1000));
+            return {
+              currentRoundNumber: round.round_number,
+              currentRoundId: round.id,
+              status: 'waiting_next_round',
+              route: `/exam/${exam.slug}/result?attemptId=${prevAtt?.id || ''}`,
+              secondsRemaining: secRem,
+              attemptId: prevAtt?.id,
+              isQualified: true,
+            };
+          } else if (nowMs < scheduledDeadlineMs) {
+            const secRem = Math.max(0, Math.floor((scheduledDeadlineMs - nowMs) / 1000));
+            return {
+              currentRoundNumber: round.round_number,
+              currentRoundId: round.id,
+              status: 'in_progress',
+              route: `/exam/${exam.slug}/round/${round.round_number}`,
+              secondsRemaining: secRem,
+            };
+          } else {
+            return {
+              currentRoundNumber: round.round_number,
+              currentRoundId: round.id,
+              status: 'eliminated',
+              route: `/exam/${exam.slug}/result?attemptId=${prevAtt?.id || ''}`,
+              secondsRemaining: 0,
+              isQualified: false,
+              message: `The allocated time window for Round ${round.round_number} has expired.`,
+            };
+          }
+        }
+      }
+
+      if (att.status === 'in_progress' && att.deadline_at && Date.now() >= new Date(att.deadline_at).getTime()) {
+        await this.submitAttempt(att.id, true);
+        att = store.attempts.get(att.id) || att;
+      }
+
+      if (att.status === 'in_progress') {
+        const secRem = Math.max(0, Math.floor((new Date(att.deadline_at).getTime() - Date.now()) / 1000));
+        return {
+          currentRoundNumber: round.round_number,
+          currentRoundId: round.id,
+          status: 'in_progress',
+          route: `/exam/${exam.slug}/round/${round.round_number}`,
+          secondsRemaining: secRem,
+          attemptId: att.id,
+        };
+      }
+
+      const result = store.results.get(att.id) || (await this.getAttemptResult(att.id));
+      const passed = result?.is_qualified ?? false;
+
+      if (!passed) {
+        return {
+          currentRoundNumber: round.round_number,
+          currentRoundId: round.id,
+          status: 'eliminated',
+          route: `/exam/${exam.slug}/result?attemptId=${att.id}`,
+          secondsRemaining: 0,
+          attemptId: att.id,
+          isQualified: false,
+        };
+      }
+
+      if (isFinalRound) {
+        return {
+          currentRoundNumber: round.round_number,
+          currentRoundId: round.id,
+          status: 'completed_all',
+          route: `/exam/${exam.slug}/result?attemptId=${att.id}`,
+          secondsRemaining: 0,
+          attemptId: att.id,
+          isQualified: true,
+        };
+      }
+    }
+
+    return {
+      currentRoundNumber: 1,
+      currentRoundId: rounds[0]?.id || '',
+      status: 'not_started',
+      route: `/exam/${exam.slug}/instructions`,
+      secondsRemaining: 0,
+    };
+  },
+
   async clearStudentRoster(examId: string): Promise<boolean> {
     const regIdsToDelete: string[] = [];
     store.registrations.forEach((r, id) => {
@@ -2278,6 +2480,18 @@ export const db = {
         throw err;
       }
 
+      // If existing attempt is in_progress but deadline has passed, auto-finalize it now!
+      if (existing.status === 'in_progress' && existing.deadline_at && Date.now() >= new Date(existing.deadline_at).getTime()) {
+        await this.submitAttempt(existing.id, true);
+        const err: any = new Error(
+          'EXAM_ALREADY_SUBMITTED: Examination deadline has expired. Your attempt has been automatically submitted.'
+        );
+        err.alreadySubmitted = true;
+        err.attemptId = existing.id;
+        err.attemptStatus = 'timed_out';
+        throw err;
+      }
+
       // Ensure questions for this round are hydrated into memory from PostgreSQL
       let pool = await this.getQuestionsByRoundId(existing.round_id);
 
@@ -2393,8 +2607,78 @@ export const db = {
       // Further randomize sequence so question order is unique per student
       assigned = shuffleArray(sampled).map((q) => q.id);
     }
-    const now = new Date();
-    const deadline = new Date(now.getTime() + round.duration_minutes * 60 * 1000);
+    let now = new Date();
+    let deadline = new Date(now.getTime() + round.duration_minutes * 60 * 1000);
+
+    // Continuous server-authoritative timeline synchronization for multi-round progression
+    if (round.round_number > 1) {
+      const allExamRounds = await this.getRoundsByExamId(round.examination_id);
+      allExamRounds.sort((a, b) => a.round_number - b.round_number);
+      const prevRound = allExamRounds.find((r) => r.round_number === round.round_number - 1);
+      if (prevRound) {
+        let prevAttempt = store.attempts.get(store.attemptByRegAndRound?.get(`${params.registrationId}_${prevRound.id}`) || '');
+        if (!prevAttempt) {
+          try {
+            const pool = getPgPool();
+            const { rows } = await pool.query(
+              'SELECT * FROM examination_attempts WHERE registration_id = $1 AND round_id = $2 LIMIT 1',
+              [params.registrationId, prevRound.id]
+            );
+            if (rows.length > 0) {
+              prevAttempt = rows[0] as ExaminationAttempt;
+            }
+          } catch {}
+        }
+
+        if (prevAttempt && prevAttempt.status === 'in_progress' && prevAttempt.deadline_at && Date.now() >= new Date(prevAttempt.deadline_at).getTime()) {
+          await this.submitAttempt(prevAttempt.id, true);
+          prevAttempt = store.attempts.get(prevAttempt.id) || prevAttempt;
+        }
+
+        const prevResult = prevAttempt ? (store.results.get(prevAttempt.id) || await this.getAttemptResult(prevAttempt.id)) : null;
+        if (!prevResult || !prevResult.is_qualified) {
+          const err: any = new Error(`CANDIDATE_NOT_QUALIFIED: You did not qualify for Round ${round.round_number}.`);
+          err.notQualified = true;
+          throw err;
+        }
+
+        const prevEndTime = prevAttempt?.submitted_at ? new Date(prevAttempt.submitted_at).getTime() : new Date(prevAttempt?.deadline_at || Date.now()).getTime();
+        const delayMs = (prevRound.next_round_delay_seconds || 60) * 1000;
+        const scheduledStartMs = prevEndTime + delayMs;
+        const durationMs = (round.duration_minutes || 20) * 60 * 1000;
+        const scheduledDeadlineMs = scheduledStartMs + durationMs;
+
+        if (Date.now() >= scheduledDeadlineMs) {
+          const attemptId = `attempt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+          const timedOutAttempt: ExaminationAttempt = {
+            id: attemptId,
+            registration_id: params.registrationId,
+            round_id: params.roundId,
+            started_at: new Date(scheduledStartMs).toISOString(),
+            deadline_at: new Date(scheduledDeadlineMs).toISOString(),
+            submitted_at: new Date(scheduledDeadlineMs).toISOString(),
+            status: 'timed_out',
+            assigned_question_ids: [],
+            cheating_warnings: 0,
+            ip_address: params.ipAddress || null,
+            user_agent: params.userAgent || null,
+            created_at: new Date().toISOString(),
+          };
+          store.attempts.set(attemptId, timedOutAttempt);
+          await this.submitAttempt(attemptId, true);
+          const err: any = new Error('EXAM_ALREADY_SUBMITTED: The allocated time window for this round has expired.');
+          err.alreadySubmitted = true;
+          err.attemptId = attemptId;
+          err.attemptStatus = 'timed_out';
+          throw err;
+        }
+
+        if (Date.now() > scheduledStartMs) {
+          now = new Date(scheduledStartMs);
+          deadline = new Date(scheduledDeadlineMs);
+        }
+      }
+    }
 
     const attemptId = `attempt-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const attempt: ExaminationAttempt = {
@@ -2610,7 +2894,7 @@ export const db = {
   },
 
   // SERVER-AUTHORITATIVE SUBMISSION & EVALUATION
-  async submitAttempt(attemptId: string): Promise<ExaminationResult> {
+  async submitAttempt(attemptId: string, isTimeout: boolean = false): Promise<ExaminationResult> {
     let attempt: ExaminationAttempt | undefined = store.attempts.get(attemptId);
     if (!attempt) {
       attempt = (await this.getAttemptById(attemptId)) || undefined;
@@ -2763,9 +3047,15 @@ export const db = {
       const finalScore = Math.max(0, Math.round(rawScore * 100) / 100);
       const isQualified = finalScore >= round.qualifying_marks;
 
+      const isActuallyTimedOut = isTimeout || (attempt.deadline_at ? new Date() >= new Date(attempt.deadline_at) : false);
+      const targetStatus = isActuallyTimedOut ? 'timed_out' : 'submitted';
+      const submittedTimestamp = isActuallyTimedOut && attempt.deadline_at && new Date(attempt.deadline_at) < new Date()
+        ? attempt.deadline_at
+        : new Date().toISOString();
+
       // Update attempt status
-      attempt.status = 'submitted';
-      attempt.submitted_at = new Date().toISOString();
+      attempt.status = targetStatus as any;
+      attempt.submitted_at = submittedTimestamp;
       store.attempts.set(attempt.id, attempt);
 
       // Save result
@@ -2795,18 +3085,26 @@ export const db = {
           [result.id, result.attempt_id, result.registration_id, result.round_id, result.score, result.total_marks, result.qualifying_marks, result.is_qualified, result.correct_count, result.wrong_count, result.unanswered_count, result.evaluated_at]
         );
         await pool.query(
-          `UPDATE examination_attempts SET status = 'submitted', submitted_at = NOW() WHERE id = $1`,
-          [attemptId]
+          `UPDATE examination_attempts SET status = $1, submitted_at = $2 WHERE id = $3`,
+          [targetStatus, submittedTimestamp, attemptId]
         );
       } catch (pgErr) {
         console.warn('[submitAttempt] Local PG save warning:', pgErr);
       }
 
-      // Dynamic next round qualification resolution
+      // Dynamic next round qualification resolution with strict timeline tracking
       const allRounds = await this.getRoundsByExamId(round.examination_id);
       allRounds.sort((a, b) => a.round_number - b.round_number);
 
       const nextRound = allRounds.find((r) => r.round_number === round.round_number + 1);
+
+      const delaySeconds = round.next_round_delay_seconds || 60;
+      const scheduledStart = isQualified && nextRound
+        ? new Date(new Date(submittedTimestamp).getTime() + delaySeconds * 1000).toISOString()
+        : null;
+      const scheduledDeadline = isQualified && nextRound && scheduledStart
+        ? new Date(new Date(scheduledStart).getTime() + (nextRound.duration_minutes * 60 * 1000)).toISOString()
+        : null;
 
       const qualKey = `${attempt.registration_id}_${attempt.round_id}`;
       const qualification: RoundQualification = {
@@ -2815,6 +3113,8 @@ export const db = {
         round_id: attempt.round_id,
         qualified: isQualified,
         next_round_number: isQualified && nextRound ? nextRound.round_number : null,
+        scheduled_round_start: scheduledStart,
+        scheduled_round_deadline: scheduledDeadline,
         qualified_at: new Date().toISOString(),
       };
       store.qualifications.set(qualKey, qualification);
@@ -2888,6 +3188,12 @@ export const db = {
           };
           store.attempts.set(attemptId, attempt);
         }
+      } catch {}
+    }
+    if (attempt && attempt.status === 'in_progress' && attempt.deadline_at && Date.now() >= new Date(attempt.deadline_at).getTime()) {
+      try {
+        await this.submitAttempt(attempt.id, true);
+        attempt = store.attempts.get(attemptId) || attempt;
       } catch {}
     }
     return attempt || null;
@@ -3043,6 +3349,25 @@ export const db = {
           store.results.set(resObj.attempt_id, resObj);
         }
       } catch {}
+    }
+
+    // Auto-finalize any attempt whose authoritative deadline has expired
+    const nowCheckTime = Date.now();
+    for (const [aId, att] of Array.from(attemptsMap.entries())) {
+      if (att.status === 'in_progress' && att.deadline_at && nowCheckTime >= new Date(att.deadline_at).getTime()) {
+        try {
+          const evalRes = await this.submitAttempt(aId, true);
+          const updatedAtt = store.attempts.get(aId);
+          if (updatedAtt) {
+            attemptsMap.set(aId, updatedAtt);
+          }
+          if (evalRes) {
+            resultsMap.set(aId, evalRes);
+          }
+        } catch (autoErr) {
+          console.warn('[getLiveMonitoringData auto-finalize warning]', aId, autoErr);
+        }
+      }
     }
 
     // 4. Fetch latest code snippets for coding rounds if needed

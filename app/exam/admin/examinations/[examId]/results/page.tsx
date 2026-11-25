@@ -31,6 +31,7 @@ import {
   RotateCcw,
   FileText,
   Terminal,
+  Radio,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { formatTimeRemaining } from '@/lib/utils';
@@ -553,6 +554,13 @@ function AdminLiveResultsContent() {
           </div>
 
           <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
+            <Link href={`/remote/${examId}`} target="_blank">
+              <Button size="sm" className="text-xs uppercase tracking-wider font-bold gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs">
+                <Radio className="w-3.5 h-3.5 animate-pulse" />
+                <span>Exam Remote</span>
+              </Button>
+            </Link>
+
             <Button
               variant="outline"
               size="sm"

@@ -19,6 +19,8 @@ import {
   AlertCircle,
   RotateCcw,
   Building2,
+  Lock,
+  Megaphone,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Examination, ExaminationRound, Student } from '@/types';
@@ -53,6 +55,7 @@ function ExamRegistrationContent() {
   const [storedStudentData, setStoredStudentData] = React.useState<Student | null>(null);
   const [hasCompletedAttempt, setHasCompletedAttempt] = React.useState(false);
   const [completedAttemptId, setCompletedAttemptId] = React.useState<string | null>(null);
+  const [verifiedNextRoute, setVerifiedNextRoute] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     async function loadExam() {
@@ -77,15 +80,18 @@ function ExamRegistrationContent() {
               }
             }
 
-            // Check if this candidate has already completed an attempt (prevent rewrite)
+            // Query authoritative multi-round progression status
             try {
-              const resCheck = await fetch(`/api/examinations/${found.id}/results`);
-              const resJson = await resCheck.json();
-              if (resJson.success && Array.isArray(resJson.data)) {
-                const foundResult = resJson.data.find((r: any) => r.registration_id === savedReg);
-                if (foundResult) {
+              const resCheck = await fetch(`/api/examinations/${found.id}/candidate-status?registrationId=${savedReg}`);
+              const statusJson = await resCheck.json();
+              if (statusJson.success && statusJson.data) {
+                const prog = statusJson.data;
+                setVerifiedNextRoute(prog.route);
+                if (prog.status === 'eliminated' || prog.status === 'completed_all') {
                   setHasCompletedAttempt(true);
-                  setCompletedAttemptId(foundResult.attempt_id);
+                  setCompletedAttemptId(prog.attemptId || null);
+                } else {
+                  setHasCompletedAttempt(false);
                 }
               }
             } catch {}
@@ -132,6 +138,9 @@ function ExamRegistrationContent() {
 
       setVerifiedStudent(data.data.student);
       setVerifiedRegId(data.data.registrationId);
+      if (data.nextRoute || data.data.nextRoute) {
+        setVerifiedNextRoute(data.nextRoute || data.data.nextRoute);
+      }
 
       if (data.hasCompletedAttempt && data.completedAttemptId) {
         setHasCompletedAttempt(true);
@@ -155,7 +164,11 @@ function ExamRegistrationContent() {
     localStorage.setItem(`exam_student_${exam.id}`, JSON.stringify(verifiedStudent));
     setRegisteredRegId(verifiedRegId);
     setStoredStudentData(verifiedStudent);
-    router.push(`/exam/${slug}/instructions`);
+    if (verifiedNextRoute) {
+      router.push(verifiedNextRoute);
+    } else {
+      router.push(`/exam/${slug}/instructions`);
+    }
   };
 
   // Handler for Open Registration Form
@@ -228,7 +241,10 @@ function ExamRegistrationContent() {
       localStorage.setItem(`exam_student_${exam.id}`, JSON.stringify(data.data.student));
       setRegisteredRegId(regId);
       setStoredStudentData(data.data.student);
+      const targetRoute = data.data.nextRoute || `/exam/${slug}/instructions`;
+      setVerifiedNextRoute(targetRoute);
       toast.success(data.data.isNew ? 'Registration completed successfully.' : 'Registration confirmed and verified.');
+      setTimeout(() => router.push(targetRoute), 600);
     } catch {
       toast.error('Network error during registration.');
     } finally {
@@ -260,7 +276,11 @@ function ExamRegistrationContent() {
   };
 
   const handleProceedToInstructions = () => {
-    router.push(`/exam/${slug}/instructions`);
+    if (verifiedNextRoute) {
+      router.push(verifiedNextRoute);
+    } else {
+      router.push(`/exam/${slug}/instructions`);
+    }
   };
 
   if (loading) {
@@ -328,6 +348,13 @@ function ExamRegistrationContent() {
   return (
     <div className="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col bg-[#faf9fe] dark:bg-[#0d0c1d] text-[#1d1a4a] dark:text-[#f4f3ff] transition-colors">
       <Navbar />
+
+      {exam.emergency_announcement && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2.5 flex items-center justify-center text-amber-900 dark:text-amber-300 text-xs gap-2 font-semibold text-center">
+          <Megaphone className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 animate-bounce" />
+          <span>PROCTOR ALERT: {exam.emergency_announcement}</span>
+        </div>
+      )}
 
       <main className="flex-1 w-full px-4 sm:px-8 lg:px-12 py-4 sm:py-6 flex flex-col min-h-0 overflow-y-auto lg:overflow-hidden">
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
@@ -442,6 +469,18 @@ function ExamRegistrationContent() {
                 </CardHeader>
 
                 <CardContent className="p-5 pt-1 space-y-3">
+                {exam.admission_locked && (
+                  <div className="p-3.5 rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-900 dark:text-rose-200 flex items-start gap-2.5">
+                    <Lock className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold">Candidate Admission Closed</p>
+                      <p className="text-[11px] text-rose-700 dark:text-rose-300 mt-0.5">
+                        The examination proctor has temporarily locked candidate admission. New registrations and roster sign-ins are frozen.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* 1. Already Logged In / Verified in LocalStorage */}
                 {registeredRegId ? (
                   <div className="space-y-4">
@@ -613,11 +652,12 @@ function ExamRegistrationContent() {
 
                       <Button
                         type="submit"
+                        disabled={submitting || exam.admission_locked}
                         isLoading={submitting}
                         className="w-full text-xs font-semibold uppercase tracking-wider gap-2 h-10"
                       >
                         <KeyRound className="w-4 h-4" />
-                        <span>Verify & Enter Examination</span>
+                        <span>{exam.admission_locked ? 'Admission Locked by Proctor' : 'Verify & Enter Examination'}</span>
                       </Button>
 
                       <p className="text-[11px] text-gray-400 text-center">
@@ -723,10 +763,11 @@ function ExamRegistrationContent() {
                     <div className="pt-2">
                       <Button
                         type="submit"
+                        disabled={submitting || exam.admission_locked}
                         isLoading={submitting}
                         className="w-full text-xs font-semibold uppercase tracking-wider gap-2 h-10"
                       >
-                        <span>Register & Enter Examination</span>
+                        <span>{exam.admission_locked ? 'Admission Locked by Proctor' : 'Register & Enter Examination'}</span>
                         <ArrowRight className="w-4 h-4" />
                       </Button>
                     </div>

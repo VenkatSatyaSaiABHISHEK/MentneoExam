@@ -45,17 +45,16 @@ function ExamInstructionsContent() {
             setStudent(JSON.parse(savedStudent));
           }
 
-          // Check if candidate already completed this examination
+          // Authoritative check: Where should the candidate be right now?
           const regId = localStorage.getItem(`exam_reg_${found.id}`);
           if (regId) {
             try {
-              const resCheck = await fetch(`/api/examinations/${found.id}/results`);
-              const resJson = await resCheck.json();
-              if (resJson.success && Array.isArray(resJson.data)) {
-                const foundResult = resJson.data.find((r: any) => r.registration_id === regId);
-                if (foundResult) {
-                  toast.info('You have already completed this examination.');
-                  router.push(`/exam/${slug}/result?attemptId=${foundResult.attempt_id}`);
+              const statusRes = await fetch(`/api/examinations/${found.id}/candidate-status?registrationId=${regId}`);
+              const statusJson = await statusRes.json();
+              if (statusJson.success && statusJson.data) {
+                const prog = statusJson.data;
+                if (prog.route && prog.route !== `/exam/${slug}/instructions`) {
+                  router.push(prog.route);
                   return;
                 }
               }

@@ -27,6 +27,7 @@ import {
   Settings,
   Trash2,
   AlertTriangle,
+  Radio,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Examination, ExaminationRound, ExamStatus } from '@/types';
@@ -209,6 +210,7 @@ function ExaminationDetailContent() {
     draft: 'neutral',
     completed: 'neutral',
     archived: 'neutral',
+    paused: 'warning',
   }[exam.status] as 'success' | 'warning' | 'info' | 'neutral';
 
   return (
@@ -249,6 +251,13 @@ function ExaminationDetailContent() {
               <span>Copy Link</span>
             </button>
 
+            <Link href={`/remote/${exam.slug || exam.id}`} target="_blank">
+              <Button size="sm" className="text-xs uppercase tracking-wider gap-1.5 font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs">
+                <Radio className="w-3.5 h-3.5 animate-pulse" />
+                <span>Exam Remote</span>
+              </Button>
+            </Link>
+
             <Link href={`/exam/${exam.slug}`} target="_blank">
               <Button variant="outline" size="sm" className="text-xs uppercase tracking-wider gap-1.5 font-semibold">
                 <span>Candidate Portal</span>
@@ -271,7 +280,23 @@ function ExaminationDetailContent() {
         </div>
 
         {/* Quick Navigation Tabs for Exam */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <Link href={`/remote/${exam.slug || exam.id}`} target="_blank" className="block">
+            <Card className="hover:border-indigo-400 transition-colors p-5 h-full border-indigo-200/80 bg-indigo-50/20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700">
+                    <Radio className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-tight">Exam Remote</h3>
+                    <p className="text-xs text-indigo-700 font-medium">Mobile Controller</p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-gray-400" />
+              </div>
+            </Card>
+          </Link>
           <Link href={`/exam/admin/examinations/${exam.id}/rounds`} className="block">
             <Card className="hover:border-gray-400 transition-colors p-5 h-full">
               <div className="flex items-center justify-between">

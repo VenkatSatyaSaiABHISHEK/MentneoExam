@@ -216,6 +216,7 @@ export default function AdminExaminationsPage() {
                       draft: 'neutral',
                       completed: 'neutral',
                       archived: 'neutral',
+                      paused: 'warning',
                     }[exam.status] as 'success' | 'warning' | 'info' | 'neutral';
 
                     return (

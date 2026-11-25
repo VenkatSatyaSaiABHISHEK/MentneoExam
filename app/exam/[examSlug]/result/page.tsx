@@ -118,8 +118,15 @@ function StudentResultContent() {
             const r = (found.rounds || []).find((rnd: any) => rnd.round_number === roundNum);
             if (r) {
               setCurrentRound(r);
-              if (r.next_round_delay_seconds) {
-                setCountdownSeconds(r.next_round_delay_seconds);
+              const submittedTime = activeResult.evaluated_at || activeResult.submittedAt || new Date().toISOString();
+              const delaySec = r.next_round_delay_seconds || 60;
+              const scheduledStart = new Date(new Date(submittedTime).getTime() + delaySec * 1000).getTime();
+              const remainingCountdown = Math.max(0, Math.floor((scheduledStart - Date.now()) / 1000));
+              setCountdownSeconds(remainingCountdown);
+
+              if (isQual && roundNum < (found.rounds?.length || 1) && remainingCountdown <= 0) {
+                router.push(`/exam/${slug}/round/${roundNum + 1}`);
+                return;
               }
             }
 

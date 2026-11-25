@@ -1,4 +1,4 @@
-export type ExamStatus = 'draft' | 'published' | 'scheduled' | 'live' | 'completed' | 'archived';
+export type ExamStatus = 'draft' | 'published' | 'scheduled' | 'live' | 'completed' | 'archived' | 'paused';
 export type RoundStatus = 'draft' | 'active' | 'completed' | 'cancelled';
 export type SelectionStrategy = 'sequential' | 'random' | 'difficulty_balanced';
 export type QuestionType = 'single_choice' | 'multiple_choice' | 'true_false' | 'coding';
@@ -50,6 +50,9 @@ export interface Examination {
   login_identifier_label?: string;
   registration_fields?: RegistrationFieldConfig[];
   roster_count?: number;
+  remote_pin?: string;
+  admission_locked?: boolean;
+  emergency_announcement?: string | null;
   created_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -205,6 +208,8 @@ export interface RoundQualification {
   round_id: string;
   qualified: boolean;
   next_round_number: number | null;
+  scheduled_round_start?: string | null;
+  scheduled_round_deadline?: string | null;
   qualified_at: string;
 }
 

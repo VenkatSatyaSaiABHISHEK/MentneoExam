@@ -41,6 +41,13 @@ export async function POST(req: Request) {
       );
     }
 
+    if (exam.admission_locked) {
+      return NextResponse.json(
+        { success: false, error: 'Candidate admission is currently closed by the exam administrator. Please wait for the proctor to open entry.' },
+        { status: 403 }
+      );
+    }
+
     // Validate dynamic required fields configured for this examination
     const configuredFields = exam.registration_fields || [];
     for (const field of configuredFields) {
@@ -76,12 +83,22 @@ export async function POST(req: Request) {
       attributes,
     });
 
+    let progress: any = null;
+    try {
+      progress = await db.getCandidateExamProgress({
+        examId,
+        registrationId: result.registration.id,
+      });
+    } catch {}
+
     return NextResponse.json({
       success: true,
       data: {
         registrationId: result.registration.id,
         student: result.student,
         isNew: result.isNew,
+        nextRoute: progress?.route || null,
+        progress,
       },
     });
   } catch (error: unknown) {
