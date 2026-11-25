@@ -16,6 +16,7 @@ import {
   ExamStatus,
   Difficulty,
   QuestionOption,
+  RegistrationFieldConfig,
 } from '@/types';
 import { getPgPool, queryPg } from '@/lib/db/pg';
 import { resilientStorage, ResilientSnapshot } from '@/lib/db/resilient-storage';
@@ -444,6 +445,7 @@ export const db = {
       auth_mode: examData.auth_mode || 'roster',
       login_identifier_field: examData.login_identifier_field || 'roll_number',
       login_identifier_label: examData.login_identifier_label || 'Roll Number',
+      registration_fields: examData.registration_fields || [],
       roster_count: examData.roster_count || 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -452,8 +454,8 @@ export const db = {
     try {
       const pool = getPgPool();
       await pool.query(`
-        INSERT INTO examinations (id, name, slug, description, status, exam_date, show_marks_to_students, max_cheating_warnings, auth_mode, login_identifier_field, login_identifier_label, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        INSERT INTO examinations (id, name, slug, description, status, exam_date, show_marks_to_students, max_cheating_warnings, auth_mode, login_identifier_field, login_identifier_label, registration_fields, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           slug = EXCLUDED.slug,
@@ -465,6 +467,7 @@ export const db = {
           auth_mode = EXCLUDED.auth_mode,
           login_identifier_field = EXCLUDED.login_identifier_field,
           login_identifier_label = EXCLUDED.login_identifier_label,
+          registration_fields = EXCLUDED.registration_fields,
           updated_at = NOW()
       `, [
         newExam.id,
@@ -478,6 +481,7 @@ export const db = {
         newExam.auth_mode,
         newExam.login_identifier_field,
         newExam.login_identifier_label,
+        JSON.stringify(newExam.registration_fields || []),
       ]);
 
       if (roundsData && roundsData.length > 0) {
@@ -906,74 +910,182 @@ export const db = {
     fullName: string;
     email: string;
     rollNumber: string;
+    phone?: string;
+    branch?: string;
+    specialization?: string;
+    college?: string;
+    yearOfStudy?: string;
+    attributes?: Record<string, any>;
   }): Promise<{ student: Student; registration: Registration; isNew: boolean }> {
     const cleanEmail = params.email.trim().toLowerCase();
     const cleanRoll = params.rollNumber.trim().toUpperCase();
+    const cleanName = params.fullName.trim();
+    const cleanPhone = params.phone ? params.phone.trim() : undefined;
+    const cleanBranch = params.branch ? params.branch.trim() : undefined;
+    const cleanSpec = params.specialization ? params.specialization.trim() : undefined;
+    const cleanCollege = params.college ? params.college.trim() : undefined;
+    const cleanYear = params.yearOfStudy ? params.yearOfStudy.trim() : undefined;
     const examRollKey = `${params.examId}_${cleanRoll}`;
 
     if (!store.regByExamAndRoll) store.regByExamAndRoll = new Map();
     if (!store.studentByRoll) store.studentByRoll = new Map();
 
-    // Fast O(1) lookup for existing registration
-    const existingRegId = store.regByExamAndRoll.get(examRollKey);
-    if (existingRegId) {
-      const existingRegistration = store.registrations.get(existingRegId);
-      if (existingRegistration) {
-        const existingStudent = store.students.get(existingRegistration.student_id)!;
-        return { student: existingStudent, registration: existingRegistration, isNew: false };
-      }
-    }
-
-    // Find or create global student record with O(1) roll number map
+    // 1. Find or create global student record
     let studentId = store.studentByRoll.get(cleanRoll);
-    let student = studentId ? store.students.get(studentId) : null;
+    let student = studentId ? store.students.get(studentId) || null : null;
 
     if (!student) {
+      try {
+        const pool = getPgPool();
+        const { rows } = await pool.query(
+          'SELECT * FROM students WHERE roll_number = $1 LIMIT 1',
+          [cleanRoll]
+        );
+        if (rows.length > 0) {
+          student = {
+            id: rows[0].id,
+            full_name: cleanName || rows[0].full_name,
+            email: cleanEmail || rows[0].email,
+            roll_number: cleanRoll,
+            login_id: rows[0].login_id || cleanRoll,
+            phone: cleanPhone ?? rows[0].phone,
+            branch: cleanBranch ?? rows[0].branch,
+            specialization: cleanSpec ?? rows[0].specialization,
+            college: cleanCollege ?? rows[0].college,
+            year_of_study: cleanYear ?? rows[0].year_of_study,
+            attributes: { ...(rows[0].attributes || {}), ...(params.attributes || {}) },
+            created_at: rows[0].created_at || new Date().toISOString(),
+          };
+          store.students.set(student.id, student);
+          store.studentByRoll.set(cleanRoll, student.id);
+        }
+      } catch {}
+    }
+
+    if (student) {
+      // Always update student with newly submitted identity to avoid stale candidate data
+      student.full_name = cleanName;
+      student.email = cleanEmail;
+      if (cleanPhone !== undefined) student.phone = cleanPhone;
+      if (cleanBranch !== undefined) student.branch = cleanBranch;
+      if (cleanSpec !== undefined) student.specialization = cleanSpec;
+      if (cleanCollege !== undefined) student.college = cleanCollege;
+      if (cleanYear !== undefined) student.year_of_study = cleanYear;
+      if (params.attributes) {
+        student.attributes = { ...(student.attributes || {}), ...params.attributes };
+      }
+      store.students.set(student.id, student);
+      store.studentByRoll.set(cleanRoll, student.id);
+    } else {
       student = {
         id: `student-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        full_name: params.fullName.trim(),
+        full_name: cleanName,
         email: cleanEmail,
         roll_number: cleanRoll,
         login_id: cleanRoll,
+        phone: cleanPhone,
+        branch: cleanBranch,
+        specialization: cleanSpec,
+        college: cleanCollege,
+        year_of_study: cleanYear,
         examination_id: params.examId,
+        attributes: params.attributes || {},
         created_at: new Date().toISOString(),
       };
       store.students.set(student.id, student);
       store.studentByRoll.set(cleanRoll, student.id);
     }
 
-    const regId = `reg-${params.examId}-${student.id}`;
-    const registration: Registration = {
-      id: regId,
-      examination_id: params.examId,
-      student_id: student.id,
-      login_id: cleanRoll,
-      registered_at: new Date().toISOString(),
-      status: 'registered',
-      student,
-    };
-    store.registrations.set(regId, registration);
-    store.regByExamAndRoll.set(examRollKey, regId);
+    // 2. Lookup or create registration for this exam
+    let isNew = true;
+    let existingRegId = store.regByExamAndRoll.get(examRollKey);
+    let registration: Registration | null = existingRegId ? store.registrations.get(existingRegId) || null : null;
 
+    if (!registration) {
+      try {
+        const pool = getPgPool();
+        const { rows } = await pool.query(
+          'SELECT * FROM registrations WHERE examination_id = $1 AND student_id = $2 LIMIT 1',
+          [params.examId, student.id]
+        );
+        if (rows.length > 0) {
+          registration = {
+            id: rows[0].id,
+            examination_id: rows[0].examination_id,
+            student_id: rows[0].student_id,
+            login_id: rows[0].login_id || cleanRoll,
+            registered_at: rows[0].registered_at,
+            status: rows[0].status || 'registered',
+            student,
+          };
+          store.registrations.set(registration.id, registration);
+          store.regByExamAndRoll.set(examRollKey, registration.id);
+          isNew = false;
+        }
+      } catch {}
+    } else {
+      isNew = false;
+      registration.student = student;
+    }
+
+    if (!registration) {
+      const regId = `reg-${params.examId}-${student.id}`;
+      registration = {
+        id: regId,
+        examination_id: params.examId,
+        student_id: student.id,
+        login_id: cleanRoll,
+        registered_at: new Date().toISOString(),
+        status: 'registered',
+        student,
+      };
+      store.registrations.set(regId, registration);
+      store.regByExamAndRoll.set(examRollKey, regId);
+      isNew = true;
+    }
+
+    // 3. Persist to PostgreSQL with UPSERT on roll_number
     try {
       const pool = getPgPool();
       await pool.query(`
-        INSERT INTO students (id, roll_number, login_id, full_name, email, examination_id, created_at)
-        VALUES ($1, $2, $2, $3, $4, $5, NOW())
-        ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name, email = EXCLUDED.email
-      `, [student.id, student.roll_number, student.full_name, student.email, params.examId]);
+        INSERT INTO students (id, roll_number, login_id, full_name, email, phone, branch, specialization, college, year_of_study, attributes, examination_id, created_at, updated_at)
+        VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        ON CONFLICT (roll_number) DO UPDATE SET
+          full_name = EXCLUDED.full_name,
+          email = EXCLUDED.email,
+          phone = COALESCE(NULLIF(EXCLUDED.phone, ''), students.phone),
+          branch = COALESCE(NULLIF(EXCLUDED.branch, ''), students.branch),
+          specialization = COALESCE(NULLIF(EXCLUDED.specialization, ''), students.specialization),
+          college = COALESCE(NULLIF(EXCLUDED.college, ''), students.college),
+          year_of_study = COALESCE(NULLIF(EXCLUDED.year_of_study, ''), students.year_of_study),
+          attributes = EXCLUDED.attributes,
+          examination_id = EXCLUDED.examination_id,
+          updated_at = NOW()
+      `, [
+        student.id,
+        student.roll_number,
+        student.full_name,
+        student.email,
+        student.phone || null,
+        student.branch || null,
+        student.specialization || null,
+        student.college || null,
+        student.year_of_study || null,
+        JSON.stringify(student.attributes || {}),
+        params.examId,
+      ]);
 
       await pool.query(`
         INSERT INTO registrations (id, examination_id, student_id, login_id, registered_at, status)
         VALUES ($1, $2, $3, $4, NOW(), 'registered')
-        ON CONFLICT (id) DO NOTHING
-      `, [regId, params.examId, student.id, cleanRoll]);
+        ON CONFLICT (id) DO UPDATE SET login_id = EXCLUDED.login_id
+      `, [registration.id, params.examId, student.id, cleanRoll]);
     } catch (err) {
       console.warn('[PostgreSQL registerStudent error]', err);
     }
 
     resilientStorage.scheduleSave(() => store.toSnapshot());
-    return { student, registration, isNew: true };
+    return { student, registration, isNew };
   },
 
   async getRegistration(regId: string): Promise<Registration | null> {
@@ -982,7 +1094,7 @@ export const db = {
       try {
         const pool = getPgPool();
         const { rows } = await pool.query(`
-          SELECT r.*, s.roll_number, s.full_name, s.email, s.attributes
+          SELECT r.*, s.roll_number, s.full_name, s.email, s.phone, s.branch, s.specialization, s.college, s.year_of_study, s.attributes
           FROM registrations r
           JOIN students s ON s.id = r.student_id
           WHERE r.id = $1 LIMIT 1
@@ -995,6 +1107,11 @@ export const db = {
             login_id: row.login_id || row.roll_number,
             full_name: row.full_name,
             email: row.email,
+            phone: row.phone || undefined,
+            branch: row.branch || undefined,
+            specialization: row.specialization || undefined,
+            college: row.college || undefined,
+            year_of_study: row.year_of_study || undefined,
             attributes: row.attributes || {},
             created_at: row.registered_at,
           };
@@ -1056,7 +1173,7 @@ export const db = {
     if (regs.length === 0) {
       try {
         const { rows } = await queryPg(`
-          SELECT r.*, s.roll_number, s.full_name, s.email, s.attributes
+          SELECT r.*, s.roll_number, s.full_name, s.email, s.phone, s.branch, s.specialization, s.college, s.year_of_study, s.attributes
           FROM registrations r
           JOIN students s ON s.id = r.student_id
           WHERE r.examination_id = $1
@@ -1069,6 +1186,11 @@ export const db = {
               login_id: row.login_id || row.roll_number,
               full_name: row.full_name,
               email: row.email,
+              phone: row.phone || undefined,
+              branch: row.branch || undefined,
+              specialization: row.specialization || undefined,
+              college: row.college || undefined,
+              year_of_study: row.year_of_study || undefined,
               attributes: row.attributes || {},
               created_at: row.registered_at,
             };
@@ -1360,6 +1482,7 @@ export const db = {
     authMode: 'roster' | 'open';
     loginIdentifierField?: string;
     loginIdentifierLabel?: string;
+    registrationFields?: RegistrationFieldConfig[];
   }): Promise<Examination | null> {
     const exam = store.examinations.get(params.examId) || (await this.getExaminationById(params.examId));
     if (!exam) return null;
@@ -1367,6 +1490,7 @@ export const db = {
     exam.auth_mode = params.authMode;
     if (params.loginIdentifierField) exam.login_identifier_field = params.loginIdentifierField;
     if (params.loginIdentifierLabel) exam.login_identifier_label = params.loginIdentifierLabel;
+    if (params.registrationFields !== undefined) exam.registration_fields = params.registrationFields;
     exam.updated_at = new Date().toISOString();
 
     store.examinations.set(params.examId, exam);
@@ -1375,8 +1499,14 @@ export const db = {
     try {
       const pool = getPgPool();
       await pool.query(
-        'UPDATE examinations SET auth_mode = $1, login_identifier_field = $2, login_identifier_label = $3, updated_at = NOW() WHERE id = $4',
-        [params.authMode, exam.login_identifier_field, exam.login_identifier_label, params.examId]
+        'UPDATE examinations SET auth_mode = $1, login_identifier_field = $2, login_identifier_label = $3, registration_fields = $4, updated_at = NOW() WHERE id = $5',
+        [
+          params.authMode,
+          exam.login_identifier_field,
+          exam.login_identifier_label,
+          JSON.stringify(exam.registration_fields || []),
+          params.examId,
+        ]
       );
     } catch (err) {
       console.warn('[PostgreSQL updateExamAuthSettings error]', err);

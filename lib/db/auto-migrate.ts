@@ -155,6 +155,13 @@ export async function ensureDatabaseSchema(): Promise<{ success: boolean; messag
       );
 
       -- Ensure existing tables have the required columns
+      ALTER TABLE public.examinations ADD COLUMN IF NOT EXISTS registration_fields JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE public.students ADD COLUMN IF NOT EXISTS phone TEXT;
+      ALTER TABLE public.students ADD COLUMN IF NOT EXISTS branch TEXT;
+      ALTER TABLE public.students ADD COLUMN IF NOT EXISTS specialization TEXT;
+      ALTER TABLE public.students ADD COLUMN IF NOT EXISTS college TEXT;
+      ALTER TABLE public.students ADD COLUMN IF NOT EXISTS year_of_study TEXT;
+      ALTER TABLE public.students DROP CONSTRAINT IF EXISTS students_email_key;
       ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
       ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS assigned_question_ids JSONB DEFAULT '[]'::jsonb;
       ALTER TABLE public.examination_attempts ADD COLUMN IF NOT EXISTS ip_address TEXT;

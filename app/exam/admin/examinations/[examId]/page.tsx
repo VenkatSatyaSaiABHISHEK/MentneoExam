@@ -297,8 +297,8 @@ function ExaminationDetailContent() {
                     <Users className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-tight">Registered Students</h3>
-                    <p className="text-xs text-gray-500">{exam._count?.registrations ?? 'View List'}</p>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-tight">Candidates & Admission</h3>
+                    <p className="text-xs text-gray-500">{exam._count?.registrations ?? 0} Students &bull; {exam.auth_mode === 'open' ? 'Open Registration' : 'Roster'}</p>
                   </div>
                 </div>
                 <ChevronRight className="w-4 h-4 text-gray-400" />

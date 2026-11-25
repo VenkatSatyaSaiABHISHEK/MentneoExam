@@ -26,7 +26,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Registration, Examination } from '@/types';
+import { Registration, Examination, RegistrationFieldConfig } from '@/types';
 
 function AdminStudentsContent() {
   const params = useParams();
@@ -42,6 +42,9 @@ function AdminStudentsContent() {
   const [addFullName, setAddFullName] = React.useState('');
   const [addRollNumber, setAddRollNumber] = React.useState('');
   const [addEmail, setAddEmail] = React.useState('');
+  const [addPhone, setAddPhone] = React.useState('');
+  const [addBranch, setAddBranch] = React.useState('');
+  const [addSpec, setAddSpec] = React.useState('');
   const [savingCandidate, setSavingCandidate] = React.useState(false);
 
   // Import Modal State
@@ -64,6 +67,13 @@ function AdminStudentsContent() {
   const [settingsModalOpen, setSettingsModalOpen] = React.useState(false);
   const [targetAuthMode, setTargetAuthMode] = React.useState<'roster' | 'open'>('roster');
   const [customLoginLabel, setCustomLoginLabel] = React.useState('');
+  const [targetRegFields, setTargetRegFields] = React.useState<RegistrationFieldConfig[]>([
+    { key: 'phone', label: 'Phone Number', required: true, enabled: true },
+    { key: 'branch', label: 'Branch / Department', required: true, enabled: true },
+    { key: 'specialization', label: 'Specialization', required: false, enabled: true },
+    { key: 'college', label: 'College / University', required: false, enabled: false },
+    { key: 'year_of_study', label: 'Year / Semester', required: false, enabled: false },
+  ]);
   const [savingSettings, setSavingSettings] = React.useState(false);
 
   const fetchExamAndStudents = async () => {
@@ -92,6 +102,9 @@ function AdminStudentsContent() {
         setExam(examJson.data);
         setTargetAuthMode(examJson.data.auth_mode || 'roster');
         setCustomLoginLabel(examJson.data.login_identifier_label || examJson.data.login_identifier_field || 'Candidate Roll Number');
+        if (Array.isArray(examJson.data.registration_fields) && examJson.data.registration_fields.length > 0) {
+          setTargetRegFields(examJson.data.registration_fields);
+        }
       }
 
       // Fetch students
@@ -246,6 +259,9 @@ function AdminStudentsContent() {
           fullName: addFullName.trim() || `Candidate ${roll}`,
           rollNumber: roll,
           email: addEmail.trim(),
+          phone: addPhone.trim() || undefined,
+          branch: addBranch.trim() || undefined,
+          specialization: addSpec.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -353,11 +369,12 @@ function AdminStudentsContent() {
           authMode: targetAuthMode,
           loginIdentifierLabel: customLoginLabel,
           loginIdentifierField: exam?.login_identifier_field || 'roll_number',
+          registrationFields: targetRegFields,
         }),
       });
       const json = await res.json();
       if (json.success) {
-        toast.success('Authentication settings updated.');
+        toast.success('Authentication & registration policy updated.');
         setSettingsModalOpen(false);
         fetchExamAndStudents();
       } else {
@@ -375,11 +392,27 @@ function AdminStudentsContent() {
       toast.info('No students to export.');
       return;
     }
-    const headers = ['Full Name', 'Login ID / Roll Number', 'Email', 'Registration Date', 'Status'];
+    const headers = [
+      'Full Name',
+      'Roll Number',
+      'Email',
+      'Phone',
+      'Branch',
+      'Specialization',
+      'College',
+      'Year of Study',
+      'Registration Date',
+      'Status',
+    ];
     const rows = registrations.map((r) => [
       r.student?.full_name || 'N/A',
       r.login_id || r.student?.roll_number || 'N/A',
       r.student?.email || 'N/A',
+      r.student?.phone || 'N/A',
+      r.student?.branch || 'N/A',
+      r.student?.specialization || 'N/A',
+      r.student?.college || 'N/A',
+      r.student?.year_of_study || 'N/A',
       new Date(r.registered_at).toLocaleString(),
       r.status,
     ]);
@@ -545,7 +578,8 @@ function AdminStudentsContent() {
                   <th className="py-3.5 px-6">Candidate Name</th>
                   <th className="py-3.5 px-4">{loginLabelDisplay}</th>
                   <th className="py-3.5 px-4">Email Address</th>
-                  <th className="py-3.5 px-4">Attributes / Metadata</th>
+                  <th className="py-3.5 px-4">Phone</th>
+                  <th className="py-3.5 px-4">Branch & Specialization</th>
                   <th className="py-3.5 px-4">Status</th>
                   <th className="py-3.5 px-6 text-right">Actions</th>
                 </tr>
@@ -553,13 +587,13 @@ function AdminStudentsContent() {
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-gray-400">
+                    <td colSpan={7} className="py-12 text-center text-gray-400">
                       Loading candidates...
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-16 text-center text-gray-500 text-xs">
+                    <td colSpan={7} className="py-16 text-center text-gray-500 text-xs">
                       <div className="max-w-sm mx-auto space-y-2">
                         <FileSpreadsheet className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                         <p className="font-semibold text-gray-900">No candidates in roster</p>
@@ -611,10 +645,20 @@ function AdminStudentsContent() {
                           </span>
                         </td>
                         <td className="py-4 px-4 text-gray-600">{r.student?.email || 'N/A'}</td>
-                        <td className="py-4 px-4 text-gray-500">
-                          {attrKeys.length > 0 ? (
+                        <td className="py-4 px-4 font-mono text-[11px] text-gray-700">
+                          {r.student?.phone || <span className="text-gray-400 font-sans italic">None</span>}
+                        </td>
+                        <td className="py-4 px-4 text-gray-700">
+                          {r.student?.branch ? (
+                            <div>
+                              <span className="font-semibold text-gray-900">{r.student.branch}</span>
+                              {r.student.specialization && (
+                                <span className="text-[10px] text-gray-500 block">{r.student.specialization}</span>
+                              )}
+                            </div>
+                          ) : attrKeys.length > 0 ? (
                             <div className="flex flex-wrap gap-1">
-                              {attrKeys.slice(0, 3).map((k) => (
+                              {attrKeys.slice(0, 2).map((k) => (
                                 <span
                                   key={`attr-${r.id}-${k}`}
                                   className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 border border-gray-200 text-gray-600 font-medium"
@@ -622,12 +666,9 @@ function AdminStudentsContent() {
                                   {k}: {String(studentAttrs[k])}
                                 </span>
                               ))}
-                              {attrKeys.length > 3 && (
-                                <span className="text-[10px] text-gray-400">+{attrKeys.length - 3} more</span>
-                              )}
                             </div>
                           ) : (
-                            <span className="text-gray-400 text-[11px]">Standard</span>
+                            <span className="text-gray-400 text-[11px] italic">Standard</span>
                           )}
                         </td>
                         <td className="py-4 px-4">
@@ -722,6 +763,39 @@ function AdminStudentsContent() {
                 onChange={(e) => setAddEmail(e.target.value)}
                 placeholder="e.g. student@college.edu"
               />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                  Phone (Optional)
+                </label>
+                <Input
+                  value={addPhone}
+                  onChange={(e) => setAddPhone(e.target.value)}
+                  placeholder="e.g. +91 9876543210"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                  Branch (Optional)
+                </label>
+                <Input
+                  value={addBranch}
+                  onChange={(e) => setAddBranch(e.target.value)}
+                  placeholder="e.g. CSE, ECE"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
+                  Specialization (Optional)
+                </label>
+                <Input
+                  value={addSpec}
+                  onChange={(e) => setAddSpec(e.target.value)}
+                  placeholder="e.g. AI/ML, Data Sci"
+                />
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-4 border-t border-gray-100">
@@ -1018,7 +1092,7 @@ function AdminStudentsContent() {
               </div>
             </div>
 
-            {targetAuthMode === 'roster' && (
+            {targetAuthMode === 'roster' ? (
               <div>
                 <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1">
                   Login Identifier Display Label
@@ -1033,6 +1107,57 @@ function AdminStudentsContent() {
                 <span className="text-[11px] text-gray-400 mt-1 block">
                   The label candidates see when asked to enter their credential.
                 </span>
+              </div>
+            ) : (
+              <div className="space-y-3 pt-1">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-0.5">
+                    Required Candidate Registration Fields
+                  </label>
+                  <p className="text-[11px] text-gray-500">
+                    Candidate Name, Email, and Roll Number are always collected. Configure additional fields:
+                  </p>
+                </div>
+
+                <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 overflow-hidden">
+                  {targetRegFields.map((f, idx) => (
+                    <div key={f.key} className="p-3 bg-white flex items-center justify-between text-xs">
+                      <div>
+                        <span className="font-semibold text-gray-900">{f.label}</span>
+                        <span className="text-[10px] text-gray-400 block font-mono">Field: {f.key}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={f.enabled}
+                            onChange={(e) => {
+                              const updated = [...targetRegFields];
+                              updated[idx] = { ...updated[idx], enabled: e.target.checked };
+                              setTargetRegFields(updated);
+                            }}
+                            className="rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                          />
+                          <span>Collect</span>
+                        </label>
+                        <label className={`flex items-center gap-1.5 text-xs ${f.enabled ? 'cursor-pointer text-gray-700' : 'opacity-40 pointer-events-none'}`}>
+                          <input
+                            type="checkbox"
+                            checked={f.required}
+                            disabled={!f.enabled}
+                            onChange={(e) => {
+                              const updated = [...targetRegFields];
+                              updated[idx] = { ...updated[idx], required: e.target.checked };
+                              setTargetRegFields(updated);
+                            }}
+                            className="rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                          />
+                          <span>Mandatory</span>
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

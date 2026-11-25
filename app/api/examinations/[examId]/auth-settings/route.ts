@@ -7,7 +7,7 @@ export async function POST(
 ) {
   try {
     const { examId } = await params;
-    const { authMode, loginIdentifierField, loginIdentifierLabel } = await req.json();
+    const { authMode, loginIdentifierField, loginIdentifierLabel, registrationFields } = await req.json();
 
     if (!authMode || (authMode !== 'roster' && authMode !== 'open')) {
       return NextResponse.json(
@@ -21,6 +21,7 @@ export async function POST(
       authMode,
       loginIdentifierField,
       loginIdentifierLabel,
+      registrationFields,
     });
 
     return NextResponse.json({ success: true, data: updated });

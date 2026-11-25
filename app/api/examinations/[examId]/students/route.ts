@@ -22,7 +22,7 @@ export async function POST(
   try {
     const { examId } = await params;
     const body = await req.json();
-    const { fullName, email, rollNumber, loginId } = body;
+    const { fullName, email, rollNumber, loginId, phone, branch, specialization, college, yearOfStudy } = body;
 
     const roll = (rollNumber || loginId || '').trim();
     if (!roll) {
@@ -40,6 +40,11 @@ export async function POST(
       fullName: name,
       email: studentEmail,
       rollNumber: roll,
+      phone,
+      branch,
+      specialization,
+      college,
+      yearOfStudy,
     });
 
     const registrations = await db.getRegistrationsByExamId(examId);

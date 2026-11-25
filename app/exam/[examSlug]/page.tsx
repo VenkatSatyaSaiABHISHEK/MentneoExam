@@ -43,6 +43,11 @@ function ExamRegistrationContent() {
   const [fullName, setFullName] = React.useState('');
   const [email, setEmail] = React.useState('');
   const [rollNumber, setRollNumber] = React.useState('');
+  const [phone, setPhone] = React.useState('');
+  const [branch, setBranch] = React.useState('');
+  const [specialization, setSpecialization] = React.useState('');
+  const [college, setCollege] = React.useState('');
+  const [yearOfStudy, setYearOfStudy] = React.useState('');
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [registeredRegId, setRegisteredRegId] = React.useState<string | null>(null);
   const [storedStudentData, setStoredStudentData] = React.useState<Student | null>(null);
@@ -167,6 +172,27 @@ function ExamRegistrationContent() {
     }
     if (!rollNumber.trim()) newErrors.rollNumber = 'Roll number is required';
 
+    const configuredFields = exam.registration_fields || [];
+    for (const field of configuredFields) {
+      if (field.enabled && field.required) {
+        if (field.key === 'phone' && !phone.trim()) {
+          newErrors.phone = `${field.label || 'Phone number'} is required`;
+        }
+        if (field.key === 'branch' && !branch.trim()) {
+          newErrors.branch = `${field.label || 'Branch / Department'} is required`;
+        }
+        if (field.key === 'specialization' && !specialization.trim()) {
+          newErrors.specialization = `${field.label || 'Specialization'} is required`;
+        }
+        if (field.key === 'college' && !college.trim()) {
+          newErrors.college = `${field.label || 'College name'} is required`;
+        }
+        if (field.key === 'year_of_study' && !yearOfStudy.trim()) {
+          newErrors.yearOfStudy = `${field.label || 'Year / Semester'} is required`;
+        }
+      }
+    }
+
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
@@ -183,6 +209,11 @@ function ExamRegistrationContent() {
           fullName: fullName.trim(),
           email: email.trim(),
           rollNumber: rollNumber.trim(),
+          phone: phone.trim() || undefined,
+          branch: branch.trim() || undefined,
+          specialization: specialization.trim() || undefined,
+          college: college.trim() || undefined,
+          yearOfStudy: yearOfStudy.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -197,7 +228,7 @@ function ExamRegistrationContent() {
       localStorage.setItem(`exam_student_${exam.id}`, JSON.stringify(data.data.student));
       setRegisteredRegId(regId);
       setStoredStudentData(data.data.student);
-      toast.success(data.data.isNew ? 'Registration completed successfully.' : 'Existing registration verified.');
+      toast.success(data.data.isNew ? 'Registration completed successfully.' : 'Registration confirmed and verified.');
     } catch {
       toast.error('Network error during registration.');
     } finally {
@@ -217,6 +248,15 @@ function ExamRegistrationContent() {
     setVerifiedRegId(null);
     setLoginIdInput('');
     setLoginError('');
+    setFullName('');
+    setEmail('');
+    setRollNumber('');
+    setPhone('');
+    setBranch('');
+    setSpecialization('');
+    setCollege('');
+    setYearOfStudy('');
+    setErrors({});
   };
 
   const handleProceedToInstructions = () => {
@@ -260,6 +300,27 @@ function ExamRegistrationContent() {
   const rounds = (exam.rounds || []).sort((a: ExaminationRound, b: ExaminationRound) => a.round_number - b.round_number);
   const isRosterAuth = (exam.auth_mode ?? 'roster') === 'roster';
   const loginIdentifierLabel = exam.login_identifier_label || exam.login_identifier_field || 'Roll Number';
+
+  const registrationFields = exam.registration_fields || [];
+  const showPhone = registrationFields.some((f) => f.key === 'phone' && f.enabled);
+  const reqPhone = registrationFields.some((f) => f.key === 'phone' && f.enabled && f.required);
+  const labelPhone = registrationFields.find((f) => f.key === 'phone')?.label || 'Phone Number';
+
+  const showBranch = registrationFields.some((f) => f.key === 'branch' && f.enabled);
+  const reqBranch = registrationFields.some((f) => f.key === 'branch' && f.enabled && f.required);
+  const labelBranch = registrationFields.find((f) => f.key === 'branch')?.label || 'Branch / Department';
+
+  const showSpec = registrationFields.some((f) => f.key === 'specialization' && f.enabled);
+  const reqSpec = registrationFields.some((f) => f.key === 'specialization' && f.enabled && f.required);
+  const labelSpec = registrationFields.find((f) => f.key === 'specialization')?.label || 'Specialization';
+
+  const showCollege = registrationFields.some((f) => f.key === 'college' && f.enabled);
+  const reqCollege = registrationFields.some((f) => f.key === 'college' && f.enabled && f.required);
+  const labelCollege = registrationFields.find((f) => f.key === 'college')?.label || 'College / University';
+
+  const showYear = registrationFields.some((f) => f.key === 'year_of_study' && f.enabled);
+  const reqYear = registrationFields.some((f) => f.key === 'year_of_study' && f.enabled && f.required);
+  const labelYear = registrationFields.find((f) => f.key === 'year_of_study')?.label || 'Year / Semester';
 
   const totalDuration = rounds.reduce((acc: number, r: ExaminationRound) => acc + r.duration_minutes, 0);
   const totalMarks = rounds.reduce((acc: number, r: ExaminationRound) => acc + Number(r.total_marks), 0);
@@ -396,10 +457,15 @@ function ExamRegistrationContent() {
                       </div>
 
                       {storedStudentData && (
-                        <div className="pt-2 border-t border-emerald-200/60 space-y-1 text-[11px] text-emerald-950">
+                        <div className="pt-2 border-t border-emerald-200/60 space-y-1.5 text-[11px] text-emerald-950">
                           <div>Candidate: <strong>{storedStudentData.full_name}</strong></div>
                           <div>{loginIdentifierLabel}: <strong className="font-mono">{storedStudentData.login_id || storedStudentData.roll_number}</strong></div>
                           <div>Email: {storedStudentData.email}</div>
+                          {storedStudentData.phone && <div>Phone: <span className="font-mono">{storedStudentData.phone}</span></div>}
+                          {storedStudentData.branch && <div>Branch: <strong>{storedStudentData.branch}</strong></div>}
+                          {storedStudentData.specialization && <div>Specialization: <strong>{storedStudentData.specialization}</strong></div>}
+                          {storedStudentData.college && <div>College: {storedStudentData.college}</div>}
+                          {storedStudentData.year_of_study && <div>Year / Sem: {storedStudentData.year_of_study}</div>}
                           {storedStudentData.attributes && Object.keys(storedStudentData.attributes).length > 0 && (
                             <div className="flex flex-wrap gap-1 pt-1">
                               {Object.entries(storedStudentData.attributes).map(([k, v]) => (
@@ -561,7 +627,7 @@ function ExamRegistrationContent() {
                   )
                 ) : (
                   /* 3. Open Registration Mode */
-                  <form onSubmit={handleOpenRegisterSubmit} className="space-y-4">
+                  <form onSubmit={handleOpenRegisterSubmit} className="space-y-3.5">
                     <Input
                       label="Candidate Full Name"
                       placeholder="e.g. Aarav Sharma"
@@ -571,24 +637,88 @@ function ExamRegistrationContent() {
                       required
                     />
 
-                    <Input
-                      label="Official Email Address"
-                      type="email"
-                      placeholder="e.g. aarav.sharma@example.edu"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      error={errors.email}
-                      required
-                    />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Input
+                        label="Official Email Address"
+                        type="email"
+                        placeholder="e.g. aarav@example.edu"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        error={errors.email}
+                        required
+                      />
 
-                    <Input
-                      label={loginIdentifierLabel}
-                      placeholder="e.g. CS2026-042"
-                      value={rollNumber}
-                      onChange={(e) => setRollNumber(e.target.value)}
-                      error={errors.rollNumber}
-                      required
-                    />
+                      <Input
+                        label={loginIdentifierLabel}
+                        placeholder="e.g. CS2026-042"
+                        value={rollNumber}
+                        onChange={(e) => setRollNumber(e.target.value)}
+                        error={errors.rollNumber}
+                        required
+                      />
+                    </div>
+
+                    {(showPhone || showBranch) && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {showPhone && (
+                          <Input
+                            label={`${labelPhone}${reqPhone ? '' : ' (Optional)'}`}
+                            type="tel"
+                            placeholder="e.g. +91 9876543210"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            error={errors.phone}
+                            required={reqPhone}
+                          />
+                        )}
+                        {showBranch && (
+                          <Input
+                            label={`${labelBranch}${reqBranch ? '' : ' (Optional)'}`}
+                            placeholder="e.g. Computer Science, ECE, IT"
+                            value={branch}
+                            onChange={(e) => setBranch(e.target.value)}
+                            error={errors.branch}
+                            required={reqBranch}
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {(showSpec || showCollege) && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {showSpec && (
+                          <Input
+                            label={`${labelSpec}${reqSpec ? '' : ' (Optional)'}`}
+                            placeholder="e.g. AI & ML, Data Science"
+                            value={specialization}
+                            onChange={(e) => setSpecialization(e.target.value)}
+                            error={errors.specialization}
+                            required={reqSpec}
+                          />
+                        )}
+                        {showCollege && (
+                          <Input
+                            label={`${labelCollege}${reqCollege ? '' : ' (Optional)'}`}
+                            placeholder="e.g. College of Engineering"
+                            value={college}
+                            onChange={(e) => setCollege(e.target.value)}
+                            error={errors.college}
+                            required={reqCollege}
+                          />
+                        )}
+                      </div>
+                    )}
+
+                    {showYear && (
+                      <Input
+                        label={`${labelYear}${reqYear ? '' : ' (Optional)'}`}
+                        placeholder="e.g. 3rd Year / 6th Semester"
+                        value={yearOfStudy}
+                        onChange={(e) => setYearOfStudy(e.target.value)}
+                        error={errors.yearOfStudy}
+                        required={reqYear}
+                      />
+                    )}
 
                     <div className="pt-2">
                       <Button

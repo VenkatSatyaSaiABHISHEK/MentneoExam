@@ -3,7 +3,19 @@ import { db } from '@/lib/db/store';
 
 export async function POST(req: Request) {
   try {
-    const { examId, fullName, email, rollNumber } = await req.json();
+    const body = await req.json();
+    const {
+      examId,
+      fullName,
+      email,
+      rollNumber,
+      phone,
+      branch,
+      specialization,
+      college,
+      yearOfStudy,
+      attributes,
+    } = body;
 
     if (!examId || !fullName || !email || !rollNumber) {
       return NextResponse.json(
@@ -29,11 +41,39 @@ export async function POST(req: Request) {
       );
     }
 
+    // Validate dynamic required fields configured for this examination
+    const configuredFields = exam.registration_fields || [];
+    for (const field of configuredFields) {
+      if (field.enabled && field.required) {
+        if (field.key === 'phone' && (!phone || !String(phone).trim())) {
+          return NextResponse.json({ success: false, error: `${field.label || 'Phone number'} is required.` }, { status: 400 });
+        }
+        if (field.key === 'branch' && (!branch || !String(branch).trim())) {
+          return NextResponse.json({ success: false, error: `${field.label || 'Branch / Department'} is required.` }, { status: 400 });
+        }
+        if (field.key === 'specialization' && (!specialization || !String(specialization).trim())) {
+          return NextResponse.json({ success: false, error: `${field.label || 'Specialization'} is required.` }, { status: 400 });
+        }
+        if (field.key === 'college' && (!college || !String(college).trim())) {
+          return NextResponse.json({ success: false, error: `${field.label || 'College'} is required.` }, { status: 400 });
+        }
+        if (field.key === 'year_of_study' && (!yearOfStudy || !String(yearOfStudy).trim())) {
+          return NextResponse.json({ success: false, error: `${field.label || 'Year / Semester'} is required.` }, { status: 400 });
+        }
+      }
+    }
+
     const result = await db.registerStudent({
       examId,
       fullName,
       email,
       rollNumber,
+      phone,
+      branch,
+      specialization,
+      college,
+      yearOfStudy,
+      attributes,
     });
 
     return NextResponse.json({

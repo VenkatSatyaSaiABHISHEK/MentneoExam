@@ -24,6 +24,13 @@ export interface Profile {
   updated_at: string;
 }
 
+export interface RegistrationFieldConfig {
+  key: string;            // 'phone' | 'branch' | 'specialization' | 'college' | 'year_of_study'
+  label: string;          // e.g. "Phone Number", "Branch / Department", "Specialization"
+  required: boolean;      // mandatory for student to submit
+  enabled: boolean;       // visible on registration form
+}
+
 export interface Examination {
   id: string;
   name: string;
@@ -41,6 +48,7 @@ export interface Examination {
   auth_mode?: 'roster' | 'open';
   login_identifier_field?: string;
   login_identifier_label?: string;
+  registration_fields?: RegistrationFieldConfig[];
   roster_count?: number;
   created_by?: string | null;
   created_at: string;
@@ -90,6 +98,11 @@ export interface Student {
   email: string;
   roll_number: string;
   login_id?: string;
+  phone?: string;
+  branch?: string;
+  specialization?: string;
+  college?: string;
+  year_of_study?: string;
   examination_id?: string;
   attributes?: Record<string, string | number | boolean>;
   created_at: string;

@@ -8,10 +8,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Trash2, ArrowRight, Save, Layers, Clock, Shield, Award } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, Save, Layers, Clock, Shield, Award, Users, UserCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { slugify } from '@/lib/utils';
-import { SelectionStrategy } from '@/types';
+import { SelectionStrategy, RegistrationFieldConfig } from '@/types';
 
 interface DynamicRoundForm {
   round_number: number;
@@ -38,6 +38,17 @@ export default function CreateExaminationPage() {
   const [maxCheatingWarnings, setMaxCheatingWarnings] = React.useState(3);
   const [showMarksToStudents, setShowMarksToStudents] = React.useState(true);
   const [instructions, setInstructions] = React.useState('');
+
+  // Admission & Registration Configuration
+  const [authMode, setAuthMode] = React.useState<'open' | 'roster'>('open');
+  const [loginIdentifierLabel, setLoginIdentifierLabel] = React.useState('Roll Number');
+  const [registrationFields, setRegistrationFields] = React.useState<RegistrationFieldConfig[]>([
+    { key: 'phone', label: 'Phone Number', required: true, enabled: true },
+    { key: 'branch', label: 'Branch / Department', required: true, enabled: true },
+    { key: 'specialization', label: 'Specialization', required: false, enabled: true },
+    { key: 'college', label: 'College / University', required: false, enabled: false },
+    { key: 'year_of_study', label: 'Year / Semester', required: false, enabled: false },
+  ]);
 
   // Dynamic rounds builder state - starts with 2 dynamic rounds, can add unlimited!
   const [rounds, setRounds] = React.useState<DynamicRoundForm[]>([
@@ -136,6 +147,10 @@ export default function CreateExaminationPage() {
         show_marks_to_students: Boolean(showMarksToStudents),
         instructions: instructions.trim(),
         status: 'published',
+        auth_mode: authMode,
+        login_identifier_field: 'roll_number',
+        login_identifier_label: loginIdentifierLabel,
+        registration_fields: authMode === 'open' ? registrationFields : [],
         rounds: rounds.map((r) => {
           const totalQ = Number(r.total_questions) || 10;
           const marksPerQ = Number(r.marks_per_question) || 1;
@@ -274,6 +289,139 @@ export default function CreateExaminationPage() {
                 </label>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* 2. Candidate Admission & Registration Policy */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <UserCheck className="w-4 h-4 text-gray-700" />
+              <span>Candidate Admission & Registration Policy</span>
+            </CardTitle>
+            <CardDescription>
+              Select how students enter this examination and customize candidate registration data collection.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div
+                onClick={() => setAuthMode('open')}
+                className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                  authMode === 'open'
+                    ? 'border-gray-900 bg-gray-50/60 ring-1 ring-gray-900'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-gray-900">Open Registration</span>
+                  <Badge variant={authMode === 'open' ? 'success' : 'neutral'}>Recommended</Badge>
+                </div>
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  Students register directly using the exam URL link. The system collects their profile data based on your requirements.
+                </p>
+              </div>
+
+              <div
+                onClick={() => setAuthMode('roster')}
+                className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                  authMode === 'roster'
+                    ? 'border-gray-900 bg-gray-50/60 ring-1 ring-gray-900'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-gray-900">Roster Mode (Strict)</span>
+                  <Badge variant={authMode === 'roster' ? 'info' : 'neutral'}>Pre-Screened</Badge>
+                </div>
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  Only candidates pre-uploaded via Excel / CSV can access the examination using their assigned identifier.
+                </p>
+              </div>
+            </div>
+
+            {authMode === 'open' ? (
+              <div className="space-y-3 pt-2 border-t border-gray-100">
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-gray-800">
+                    Candidate Profile Fields Configuration
+                  </h4>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Full Name, Email Address, and Roll Number are always collected. Check the additional fields you want to collect and make mandatory:
+                  </p>
+                </div>
+
+                <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
+                  {registrationFields.map((field, idx) => (
+                    <div key={field.key} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      <div>
+                        <div className="font-semibold text-gray-900 flex items-center gap-2">
+                          <span>{field.label}</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                            {field.key}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-gray-400">
+                          {field.key === 'phone' && 'Collect candidate phone or WhatsApp contact number'}
+                          {field.key === 'branch' && 'Collect candidate academic department or branch (e.g. CSE, ECE)'}
+                          {field.key === 'specialization' && 'Collect technical focus or domain (e.g. AI & ML, Data Science)'}
+                          {field.key === 'college' && 'Collect candidate institution or college name'}
+                          {field.key === 'year_of_study' && 'Collect academic year or semester of study'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-5 shrink-0">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={field.enabled}
+                            onChange={(e) => {
+                              const updated = [...registrationFields];
+                              updated[idx] = { ...updated[idx], enabled: e.target.checked };
+                              setRegistrationFields(updated);
+                            }}
+                            className="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                          />
+                          <span>Collect Field</span>
+                        </label>
+
+                        <label
+                          className={`flex items-center gap-1.5 text-xs font-medium ${
+                            field.enabled ? 'cursor-pointer text-gray-700' : 'opacity-40 pointer-events-none'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={field.required}
+                            disabled={!field.enabled}
+                            onChange={(e) => {
+                              const updated = [...registrationFields];
+                              updated[idx] = { ...updated[idx], required: e.target.checked };
+                              setRegistrationFields(updated);
+                            }}
+                            className="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                          />
+                          <span>Mandatory</span>
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 pt-2 border-t border-gray-100">
+                <Input
+                  label="Candidate Identifier Display Label"
+                  placeholder="e.g. Candidate Roll Number, Hall Ticket Number"
+                  value={loginIdentifierLabel}
+                  onChange={(e) => setLoginIdentifierLabel(e.target.value)}
+                  required
+                />
+                <p className="text-[11px] text-gray-400">
+                  This label is shown to candidates when prompted to authenticate into the examination.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
