@@ -33,10 +33,10 @@ export async function GET(
     // Calculate aggregated metrics
     const rows = monitoringData.rows || [];
     const totalRegistered = rows.filter((r: any) => r.attemptStatus === 'registered' || r.attemptStatus !== 'registered').length;
-    const totalWriting = rows.filter((r: any) => r.attemptStatus === 'in_progress').length;
-    const totalSubmitted = rows.filter((r: any) => r.attemptStatus === 'submitted' || r.attemptStatus === 'timed_out').length;
+    const totalWriting = rows.filter((r: any) => r.attemptStatus === 'in_progress' && r.secondsRemaining > 0).length;
+    const totalSubmitted = rows.filter((r: any) => r.attemptStatus === 'submitted' || r.attemptStatus === 'timed_out' || (r.attemptStatus === 'in_progress' && r.secondsRemaining <= 0)).length;
     const totalQualified = rows.filter((r: any) => r.isQualified === true).length;
-    const totalFailed = rows.filter((r: any) => r.isQualified === false).length;
+    const totalFailed = rows.filter((r: any) => r.isQualified === false || (r.attemptStatus === 'timed_out' && !r.isQualified)).length;
 
     return NextResponse.json({
       success: true,

@@ -24,6 +24,7 @@ import {
   Database,
   Maximize2,
   Keyboard,
+  Megaphone,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -68,6 +69,30 @@ function ExaminationEngineContent() {
 
   // Submission lock countdown (delayed submit)
   const [submitLockRemaining, setSubmitLockRemaining] = React.useState<number>(0);
+
+  // Emergency Proctor Broadcast Banner state (auto-hide after 60s)
+  const [emergencyAnnouncement, setEmergencyAnnouncement] = React.useState<string | null>(null);
+  const [dismissedBroadcast, setDismissedBroadcast] = React.useState<string | null>(null);
+  const [broadcastRemainingSec, setBroadcastRemainingSec] = React.useState<number>(60);
+
+  React.useEffect(() => {
+    if (!emergencyAnnouncement) return;
+    if (dismissedBroadcast === emergencyAnnouncement) return;
+
+    setBroadcastRemainingSec(60);
+    const interval = setInterval(() => {
+      setBroadcastRemainingSec((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setDismissedBroadcast(emergencyAnnouncement);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [emergencyAnnouncement, dismissedBroadcast]);
 
   // Cheating deterrence state
   const [warningModalOpen, setWarningModalOpen] = React.useState(false);
@@ -172,6 +197,11 @@ function ExaminationEngineContent() {
         const startData = await startRes.json();
 
         if (!startRes.ok || !startData.success) {
+          if (startData.isDisqualified) {
+            toast.error(startData.error || 'You have been disqualified from this examination.');
+            router.push(`/exam/${slug}/result?disqualified=true`);
+            return;
+          }
           if (startData.alreadySubmitted && startData.attemptId) {
             toast.error('You have already completed this examination round. Duplicate attempts are prohibited.');
             router.push(`/exam/${slug}/result?attemptId=${startData.attemptId}`);
@@ -331,13 +361,20 @@ function ExaminationEngineContent() {
   React.useEffect(() => {
     if (!attempt || attempt.status !== 'in_progress') return;
 
-    const jitter = Math.floor(Math.random() * 8000);
+    const jitter = Math.floor(Math.random() * 4000);
     const syncInterval = setInterval(async () => {
       try {
         const res = await fetch(`/api/attempts/${attempt.id}/status`);
         const json = await res.json();
         if (json.success && json.data) {
           setSecondsRemaining(json.data.secondsRemaining);
+          if (json.data.isDisqualified) {
+            router.push(`/exam/${slug}/result?disqualified=true`);
+            return;
+          }
+          if (json.data.emergencyAnnouncement) {
+            setEmergencyAnnouncement(json.data.emergencyAnnouncement);
+          }
           if (json.data.isExpired || json.data.status !== 'in_progress') {
             handleForceAutoSubmit('Examination deadline expired on the server.');
           }
@@ -345,7 +382,7 @@ function ExaminationEngineContent() {
       } catch {
         // Keep running client timer if sync request fails
       }
-    }, 32000 + jitter);
+    }, 15000 + jitter);
 
     return () => clearInterval(syncInterval);
   }, [attempt]);
@@ -1018,6 +1055,26 @@ function ExaminationEngineContent() {
           />
         </div>
       </header>
+
+      {/* Proctor Emergency Announcement Banner with 60s Auto-Hide */}
+      {emergencyAnnouncement && dismissedBroadcast !== emergencyAnnouncement && (
+        <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex items-center justify-between text-amber-950 dark:text-amber-200 text-xs font-semibold shadow-xs z-20">
+          <div className="max-w-6xl mx-auto flex items-center justify-center gap-2.5 flex-1 text-center">
+            <Megaphone className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 animate-bounce" />
+            <span>PROCTOR ALERT: {emergencyAnnouncement}</span>
+            <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-900 dark:text-amber-300 font-mono">
+              Auto-hiding in {broadcastRemainingSec}s
+            </span>
+          </div>
+          <button
+            onClick={() => setDismissedBroadcast(emergencyAnnouncement)}
+            className="p-1 hover:bg-amber-500/20 rounded text-amber-800 dark:text-amber-300 hover:text-amber-950 ml-2"
+            title="Dismiss alert"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Resilient Network Offline Reassurance Banner */}
       {syncStatus === 'offline' && (

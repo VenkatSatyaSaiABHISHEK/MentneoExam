@@ -12,14 +12,43 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Attempt not found' }, { status: 404 });
     }
 
+    // Check if candidate registration is disqualified
+    const reg = await db.getRegistration(attempt.registration_id);
+    if (reg?.status === 'disqualified') {
+      return NextResponse.json({
+        success: true,
+        data: {
+          status: 'terminated',
+          isDisqualified: true,
+          secondsRemaining: 0,
+          cheatingWarnings: attempt.cheating_warnings,
+          isExpired: true,
+          emergencyAnnouncement: null,
+          isExamPaused: false,
+        },
+      });
+    }
+
     const now = Date.now();
-    const deadline = new Date(attempt.deadline_at).getTime();
-    const secondsRemaining = attempt.status === 'in_progress' ? Math.max(0, Math.floor((deadline - now) / 1000)) : 0;
+    const round = await db.getRoundById(attempt.round_id);
+    const durationMs = (round?.duration_minutes || 20) * 60 * 1000;
+    const startedMs = attempt.started_at ? new Date(attempt.started_at).getTime() : now;
+    const deadlineMs = attempt.deadline_at ? new Date(attempt.deadline_at).getTime() : (startedMs + durationMs);
+    const rawSec = Math.floor((deadlineMs - now) / 1000);
+    const secondsRemaining = attempt.status === 'in_progress' ? Math.max(0, rawSec) : 0;
+
+    if (secondsRemaining <= 0 && attempt.status === 'in_progress') {
+      try {
+        await db.submitAttempt(attemptId, true);
+        attempt.status = 'timed_out';
+      } catch {
+        attempt.status = 'timed_out';
+      }
+    }
 
     let emergencyAnnouncement: string | null = null;
     let isExamPaused = false;
     try {
-      const round = await db.getRoundById(attempt.round_id);
       if (round) {
         const exam = await db.getExaminationById(round.examination_id);
         if (exam) {
@@ -45,4 +74,3 @@ export async function GET(
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
-

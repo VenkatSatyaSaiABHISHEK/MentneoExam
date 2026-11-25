@@ -21,6 +21,7 @@ import {
   Building2,
   Lock,
   Megaphone,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Examination, ExaminationRound, Student } from '@/types';
@@ -54,8 +55,32 @@ function ExamRegistrationContent() {
   const [registeredRegId, setRegisteredRegId] = React.useState<string | null>(null);
   const [storedStudentData, setStoredStudentData] = React.useState<Student | null>(null);
   const [hasCompletedAttempt, setHasCompletedAttempt] = React.useState(false);
+  const [isDisqualified, setIsDisqualified] = React.useState(false);
   const [completedAttemptId, setCompletedAttemptId] = React.useState<string | null>(null);
   const [verifiedNextRoute, setVerifiedNextRoute] = React.useState<string | null>(null);
+
+  // Proctor Broadcast Announcement auto-hide (60 seconds)
+  const [dismissedBroadcast, setDismissedBroadcast] = React.useState<string | null>(null);
+  const [broadcastRemainingSec, setBroadcastRemainingSec] = React.useState<number>(60);
+
+  React.useEffect(() => {
+    if (!exam?.emergency_announcement) return;
+    if (dismissedBroadcast === exam.emergency_announcement) return;
+
+    setBroadcastRemainingSec(60);
+    const interval = setInterval(() => {
+      setBroadcastRemainingSec((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setDismissedBroadcast(exam.emergency_announcement || null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [exam?.emergency_announcement, dismissedBroadcast]);
 
   React.useEffect(() => {
     async function loadExam() {
@@ -74,7 +99,11 @@ function ExamRegistrationContent() {
             setRegisteredRegId(savedReg);
             if (savedStudent) {
               try {
-                setStoredStudentData(JSON.parse(savedStudent));
+                const parsedSt = JSON.parse(savedStudent);
+                setStoredStudentData(parsedSt);
+                if (parsedSt.status === 'disqualified') {
+                  setIsDisqualified(true);
+                }
               } catch {
                 // ignore
               }
@@ -87,7 +116,9 @@ function ExamRegistrationContent() {
               if (statusJson.success && statusJson.data) {
                 const prog = statusJson.data;
                 setVerifiedNextRoute(prog.route);
-                if (prog.status === 'eliminated' || prog.status === 'completed_all') {
+                if (prog.status === 'eliminated' && prog.message?.includes('DISQUALIFIED')) {
+                  setIsDisqualified(true);
+                } else if (prog.status === 'eliminated' || prog.status === 'completed_all') {
                   setHasCompletedAttempt(true);
                   setCompletedAttemptId(prog.attemptId || null);
                 } else {
@@ -349,10 +380,22 @@ function ExamRegistrationContent() {
     <div className="min-h-screen lg:h-screen lg:overflow-hidden flex flex-col bg-[#faf9fe] dark:bg-[#0d0c1d] text-[#1d1a4a] dark:text-[#f4f3ff] transition-colors">
       <Navbar />
 
-      {exam.emergency_announcement && (
-        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2.5 flex items-center justify-center text-amber-900 dark:text-amber-300 text-xs gap-2 font-semibold text-center">
-          <Megaphone className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 animate-bounce" />
-          <span>PROCTOR ALERT: {exam.emergency_announcement}</span>
+      {exam.emergency_announcement && dismissedBroadcast !== exam.emergency_announcement && (
+        <div className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-amber-950 dark:text-amber-200 text-xs font-semibold shadow-xs">
+          <div className="max-w-6xl mx-auto flex items-center justify-center gap-2 flex-1 text-center">
+            <Megaphone className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 animate-bounce" />
+            <span>PROCTOR ALERT: {exam.emergency_announcement}</span>
+            <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-900 dark:text-amber-300 font-mono">
+              Auto-hiding in {broadcastRemainingSec}s
+            </span>
+          </div>
+          <button
+            onClick={() => setDismissedBroadcast(exam.emergency_announcement || null)}
+            className="p-1 hover:bg-amber-500/20 rounded text-amber-800 dark:text-amber-300 hover:text-amber-950 ml-2"
+            title="Dismiss announcement"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -518,7 +561,26 @@ function ExamRegistrationContent() {
                       )}
                     </div>
 
-                    {hasCompletedAttempt ? (
+                    {isDisqualified ? (
+                      <div className="space-y-3">
+                        <div className="p-4 rounded-xl border border-rose-300 bg-rose-50 text-xs text-rose-950 space-y-1.5">
+                          <p className="font-bold flex items-center gap-1.5 text-rose-900 text-sm">
+                            <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+                            <span>EXAMINATION DISQUALIFIED</span>
+                          </p>
+                          <p className="text-xs text-rose-800 leading-relaxed">
+                            You have been disqualified from this examination by the administrator. Your access to write or continue this examination has been revoked.
+                          </p>
+                        </div>
+
+                        <Button
+                          disabled
+                          className="w-full text-xs font-semibold uppercase tracking-wider h-10 bg-rose-100 text-rose-400 border border-rose-200 cursor-not-allowed"
+                        >
+                          <span>Access Revoked / Disqualified</span>
+                        </Button>
+                      </div>
+                    ) : hasCompletedAttempt ? (
                       <div className="space-y-3">
                         <div className="p-3.5 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-900 space-y-1">
                           <p className="font-bold flex items-center gap-1.5 text-amber-950">

@@ -92,3 +92,30 @@ export async function DELETE(
   }
 }
 
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ examId: string }> }
+) {
+  try {
+    const { examId } = await params;
+    const body = await req.json();
+    const { registrationId, status } = body;
+
+    if (!registrationId || !status) {
+      return NextResponse.json({ success: false, error: 'registrationId and status are required' }, { status: 400 });
+    }
+
+    await db.updateRegistrationStatus(registrationId, status);
+    const registrations = await db.getRegistrationsByExamId(examId);
+
+    return NextResponse.json({
+      success: true,
+      registrations,
+      message: `Candidate status updated to ${status}.`,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Failed to update candidate status';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}
+

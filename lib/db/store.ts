@@ -1366,6 +1366,39 @@ export const db = {
           }
         }
       }
+
+      // 2b. Query students table directly in case a student was registered for this exam without a registrations join row yet
+      try {
+        const { rows: stRows } = await queryPg(`
+          SELECT s.*, s.login_id as s_login_id
+          FROM students s
+          WHERE s.examination_id = ANY($1::text[])
+        `, [targetIds]);
+        if (stRows && stRows.length > 0) {
+          for (const row of stRows) {
+            const student: Student = {
+              id: row.id,
+              roll_number: row.roll_number,
+              login_id: row.login_id || row.s_login_id || row.roll_number,
+              full_name: row.full_name,
+              email: row.email,
+              phone: row.phone || undefined,
+              branch: row.branch || undefined,
+              specialization: row.specialization || undefined,
+              college: row.college || undefined,
+              year_of_study: row.year_of_study || undefined,
+              examination_id: exam?.id || row.examination_id,
+              attributes: row.attributes || {},
+              created_at: row.created_at,
+            };
+            store.students.set(student.id, student);
+            if (student.roll_number) {
+              if (!store.studentByRoll) store.studentByRoll = new Map();
+              store.studentByRoll.set(student.roll_number.trim().toUpperCase(), student.id);
+            }
+          }
+        }
+      } catch {}
     } catch (err) {
       console.warn('[PostgreSQL getRegistrationsByExamId error]', err);
     }
@@ -1414,6 +1447,34 @@ export const db = {
     }
 
     return matchedRegs;
+  },
+
+  async updateRegistrationStatus(registrationId: string, status: 'registered' | 'started' | 'completed' | 'disqualified'): Promise<boolean> {
+    const reg = store.registrations.get(registrationId) || (await this.getRegistration(registrationId));
+    if (reg) {
+      reg.status = status;
+      store.registrations.set(registrationId, reg);
+    }
+    try {
+      const pool = getPgPool();
+      await pool.query('UPDATE public.registrations SET status = $1 WHERE id = $2', [status, registrationId]);
+      if (status === 'disqualified') {
+        await pool.query(
+          "UPDATE public.examination_attempts SET status = 'timed_out', submitted_at = NOW() WHERE registration_id = $1 AND status = 'in_progress'",
+          [registrationId]
+        );
+        for (const att of store.attempts.values()) {
+          if (att.registration_id === registrationId && att.status === 'in_progress') {
+            att.status = 'timed_out';
+            att.submitted_at = new Date().toISOString();
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL updateRegistrationStatus error]', err);
+    }
+    resilientStorage.scheduleSave(() => store.toSnapshot());
+    return true;
   },
 
   async deleteRegistration(registrationId: string): Promise<boolean> {
@@ -1754,6 +1815,19 @@ export const db = {
   }> {
     const exam = store.examinations.get(params.examId) || (await this.getExaminationById(params.examId));
     if (!exam) throw new Error('Examination not found');
+
+    const reg = await this.getRegistration(params.registrationId);
+    if (reg?.status === 'disqualified') {
+      return {
+        currentRoundNumber: 1,
+        currentRoundId: '',
+        status: 'eliminated',
+        route: `/exam/${exam.slug}/result?disqualified=true`,
+        secondsRemaining: 0,
+        isQualified: false,
+        message: 'DISQUALIFIED: You have been disqualified from this examination by the invigilator.',
+      };
+    }
 
     const rounds = await this.getRoundsByExamId(exam.id);
     rounds.sort((a, b) => a.round_number - b.round_number);
@@ -3549,7 +3623,12 @@ export const db = {
     // Auto-finalize any attempt whose authoritative deadline has expired
     const nowCheckTime = Date.now();
     for (const [aId, att] of Array.from(attemptsMap.entries())) {
-      if (att.status === 'in_progress' && att.deadline_at && nowCheckTime >= new Date(att.deadline_at).getTime()) {
+      const round = rounds.find((r) => r.id === att.round_id) || store.rounds.get(att.round_id);
+      const durationMs = (round?.duration_minutes || 20) * 60 * 1000;
+      const startedMs = att.started_at ? new Date(att.started_at).getTime() : (att.created_at ? new Date(att.created_at).getTime() : nowCheckTime);
+      const deadlineMs = att.deadline_at ? new Date(att.deadline_at).getTime() : (startedMs + durationMs);
+
+      if (att.status === 'in_progress' && (nowCheckTime >= deadlineMs || isNaN(deadlineMs))) {
         try {
           const evalRes = await this.submitAttempt(aId, true);
           const updatedAtt = store.attempts.get(aId);
@@ -3561,6 +3640,10 @@ export const db = {
           }
         } catch (autoErr) {
           console.warn('[getLiveMonitoringData auto-finalize warning]', aId, autoErr);
+          att.status = 'timed_out';
+          att.submitted_at = new Date().toISOString();
+          attemptsMap.set(aId, att);
+          store.attempts.set(aId, att);
         }
       }
     }
@@ -3615,8 +3698,15 @@ export const db = {
 
       // Authoritative seconds remaining calculation
       const now = Date.now();
-      const deadline = new Date(attempt.deadline_at).getTime();
-      const secondsRemaining = attempt.status === 'in_progress' ? Math.max(0, Math.floor((deadline - now) / 1000)) : 0;
+      const durationMs = (round?.duration_minutes || 20) * 60 * 1000;
+      const startedMs = attempt.started_at ? new Date(attempt.started_at).getTime() : (attempt.created_at ? new Date(attempt.created_at).getTime() : now);
+      const deadlineMs = attempt.deadline_at ? new Date(attempt.deadline_at).getTime() : (startedMs + durationMs);
+      const rawSec = Math.floor((deadlineMs - now) / 1000);
+
+      // If attempt is in_progress but time has expired, enforce timed_out
+      const isTimedOut = attempt.status === 'in_progress' && rawSec <= 0;
+      const effectiveStatus = isTimedOut ? 'timed_out' : attempt.status;
+      const secondsRemaining = effectiveStatus === 'in_progress' ? Math.max(0, rawSec) : 0;
 
       monitoringRows.push({
         attemptId: attempt.id,
@@ -3630,17 +3720,17 @@ export const db = {
         roundName: round?.name || 'N/A',
         roundNumber: round?.round_number || 1,
         roundType: round?.round_type || 'mcq',
-        attemptStatus: attempt.status,
+        attemptStatus: effectiveStatus,
         cheatingWarnings: attempt.cheating_warnings || 0,
-        score: result?.score ?? null,
+        score: result?.score ?? (isTimedOut ? 0 : null),
         totalMarks: round?.total_marks ?? 0,
         qualifyingMarks: round?.qualifying_marks ?? 0,
-        isQualified: result?.is_qualified ?? null,
+        isQualified: result?.is_qualified ?? (isTimedOut ? false : null),
         codeSnippet,
         codeLanguage,
         secondsRemaining,
         startedAt: attempt.started_at,
-        submittedAt: attempt.submitted_at,
+        submittedAt: attempt.submitted_at || (isTimedOut ? new Date().toISOString() : null),
       });
     }
 

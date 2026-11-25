@@ -83,6 +83,17 @@ export async function POST(req: Request) {
       attributes,
     });
 
+    if (result.registration.status === 'disqualified') {
+      return NextResponse.json(
+        {
+          success: false,
+          isDisqualified: true,
+          error: 'DISQUALIFIED: You have been disqualified from this examination by the invigilator. You cannot register or write.',
+        },
+        { status: 403 }
+      );
+    }
+
     let progress: any = null;
     try {
       progress = await db.getCandidateExamProgress({

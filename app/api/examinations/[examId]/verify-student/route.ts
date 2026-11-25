@@ -35,6 +35,18 @@ export async function POST(
       );
     }
 
+    if (verification.registration?.status === 'disqualified') {
+      return NextResponse.json(
+        {
+          success: false,
+          verified: false,
+          isDisqualified: true,
+          error: 'DISQUALIFIED: You have been disqualified from this examination by the invigilator. Access revoked.',
+        },
+        { status: 403 }
+      );
+    }
+
     if (verification.examination?.admission_locked) {
       return NextResponse.json(
         {

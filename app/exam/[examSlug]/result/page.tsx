@@ -16,6 +16,7 @@ import {
   Clock,
   Layers,
   ShieldCheck,
+  ShieldAlert,
   Check,
   Wifi,
   Eye,
@@ -41,6 +42,7 @@ function StudentResultContent() {
   const [exam, setExam] = React.useState<any>(null);
   const [currentRound, setCurrentRound] = React.useState<ExaminationRound | null>(null);
   const [student, setStudent] = React.useState<Student | null>(null);
+  const [isDisqualified, setIsDisqualified] = React.useState(false);
 
   // 1-minute (60 seconds) countdown timer before automatic transition to next round
   const [countdownSeconds, setCountdownSeconds] = React.useState<number>(60);
@@ -52,13 +54,29 @@ function StudentResultContent() {
     async function loadResult() {
       try {
         setLoading(true);
+        const isDisqParam = searchParams.get('disqualified') === 'true';
+        if (isDisqParam) {
+          setIsDisqualified(true);
+        }
+
         const examRes = await fetch('/api/examinations');
         const examJson = await examRes.json();
         const found = examJson.data?.find((e: any) => e.slug === slug);
         if (found) setExam(found);
 
         const storedStudent = found ? localStorage.getItem(`exam_student_${found.id}`) : null;
-        if (storedStudent) setStudent(JSON.parse(storedStudent));
+        if (storedStudent) {
+          try {
+            const parsedSt = JSON.parse(storedStudent);
+            setStudent(parsedSt);
+            if (parsedSt.status === 'disqualified') setIsDisqualified(true);
+          } catch {}
+        }
+
+        if (isDisqParam) {
+          setLoading(false);
+          return;
+        }
 
         if (!attemptId) {
           toast.error('No attempt ID provided.');
@@ -193,12 +211,45 @@ function StudentResultContent() {
       <Navbar />
 
       <main className="flex-1 max-w-3xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
-        {/* Outcome Header Banner */}
-        <div
-          className={`rounded-2xl border p-5 sm:p-8 text-center transition-all shadow-xs ${
-            isQualified ? 'border-emerald-200 bg-white' : 'border-gray-200 bg-white'
-          }`}
-        >
+        {isDisqualified ? (
+          <div className="rounded-2xl border border-rose-200 bg-white dark:bg-zinc-900 p-6 sm:p-10 text-center shadow-xs">
+            <div className="flex justify-center mb-4">
+              <div className="w-16 h-16 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600">
+                <ShieldAlert className="w-8 h-8" />
+              </div>
+            </div>
+
+            <Badge variant="danger" size="md" className="mb-3 uppercase font-mono tracking-wider font-bold">
+              Status: Disqualified / Failed
+            </Badge>
+
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2">
+              Candidate Test Access Revoked
+            </h1>
+
+            <p className="text-sm text-gray-600 dark:text-gray-400 max-w-lg mx-auto mb-6 leading-relaxed">
+              You have been disqualified from this examination by the examination invigilator / proctor due to proctoring policy enforcement or administrator directive. You are not eligible to continue or re-attempt.
+            </p>
+
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 max-w-md mx-auto text-left text-xs text-rose-950 space-y-2 font-mono">
+              <div><span className="text-rose-600 font-semibold uppercase">Examination:</span> {exam?.name || slug}</div>
+              {student && (
+                <>
+                  <div><span className="text-rose-600 font-semibold uppercase">Candidate:</span> {student.full_name}</div>
+                  <div><span className="text-rose-600 font-semibold uppercase">Roll / Login ID:</span> {student.roll_number}</div>
+                </>
+              )}
+              <div><span className="text-rose-600 font-semibold uppercase">Verdict:</span> Permanent Disqualification</div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Outcome Header Banner */}
+            <div
+              className={`rounded-2xl border p-5 sm:p-8 text-center transition-all shadow-xs ${
+                isQualified ? 'border-emerald-200 bg-white' : 'border-gray-200 bg-white'
+              }`}
+            >
           <div className="flex justify-center mb-4">
             {isQualified ? (
               <div className="w-14 h-14 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
@@ -467,6 +518,8 @@ function StudentResultContent() {
           examName={exam?.name || 'Examination'}
           result={result}
         />
+        </>
+      )}
       </main>
     </div>
   );

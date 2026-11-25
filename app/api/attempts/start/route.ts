@@ -17,6 +17,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: 'Registration record not found.' }, { status: 404 });
     }
 
+    if (reg.status === 'disqualified') {
+      return NextResponse.json(
+        {
+          success: false,
+          isDisqualified: true,
+          error: 'DISQUALIFIED: You have been disqualified from this examination by the invigilator. You cannot write this examination.',
+        },
+        { status: 403 }
+      );
+    }
+
     const { attempt, questions, answers } = await db.startAttempt({
       registrationId,
       roundId,

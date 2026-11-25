@@ -127,6 +127,10 @@ function AdminStudentsContent() {
 
   React.useEffect(() => {
     fetchExamAndStudents();
+    const interval = setInterval(() => {
+      fetchExamAndStudents();
+    }, 8000);
+    return () => clearInterval(interval);
   }, [examId]);
 
   // Handle spreadsheet file selection and browser parsing
@@ -665,16 +669,31 @@ function AdminStudentsContent() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => {
-                                  r.status = 'disqualified';
-                                  const updated = [...registrations];
-                                  setRegistrations(updated);
-                                  if (typeof window !== 'undefined') {
-                                    try {
-                                      localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(updated));
-                                    } catch {}
+                                onClick={async () => {
+                                  if (!confirm(`Are you sure you want to DISQUALIFY candidate "${r.student?.full_name || r.login_id}"? Their test access will be revoked immediately.`)) return;
+                                  try {
+                                    const res = await fetch(`/api/examinations/${examId}/students`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ registrationId: r.id, status: 'disqualified' }),
+                                    });
+                                    const json = await res.json();
+                                    if (json.success) {
+                                      r.status = 'disqualified';
+                                      const updated = [...registrations];
+                                      setRegistrations(updated);
+                                      if (typeof window !== 'undefined') {
+                                        try {
+                                          localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(updated));
+                                        } catch {}
+                                      }
+                                      toast.error(`Candidate ${r.login_id || r.student?.roll_number} disqualified and access revoked.`);
+                                    } else {
+                                      toast.error(json.error || 'Failed to update candidate status.');
+                                    }
+                                  } catch {
+                                    toast.error('Network error.');
                                   }
-                                  toast.error(`Candidate ${r.login_id || r.student?.roll_number} disqualified.`);
                                 }}
                                 className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 h-7 px-2"
                               >

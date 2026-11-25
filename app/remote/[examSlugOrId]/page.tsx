@@ -524,9 +524,9 @@ function ExamRemoteContent() {
     return true;
   });
 
-  const writingCount = allCandidates.filter((c: any) => c.attemptStatus === 'in_progress').length;
+  const writingCount = allCandidates.filter((c: any) => c.attemptStatus === 'in_progress' && c.secondsRemaining > 0).length;
   const registeredCount = allCandidates.filter((c: any) => c.attemptStatus === 'registered').length;
-  const submittedCount = allCandidates.filter((c: any) => c.attemptStatus === 'submitted' || c.attemptStatus === 'timed_out').length;
+  const submittedCount = allCandidates.filter((c: any) => c.attemptStatus === 'submitted' || c.attemptStatus === 'timed_out' || (c.attemptStatus === 'in_progress' && c.secondsRemaining <= 0)).length;
   const qualifiedCount = allCandidates.filter((c: any) => c.isQualified === true).length;
 
   // 1. PIN Lock Screen (White & Classical)
