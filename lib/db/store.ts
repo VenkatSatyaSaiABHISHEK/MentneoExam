@@ -1046,9 +1046,29 @@ export const db = {
       isNew = true;
     }
 
+    // Resolve examination to authoritative ID
+    const resolvedExam =
+      store.examinations.get(params.examId) ||
+      (await this.getExaminationById(params.examId)) ||
+      (await this.getExaminationBySlug(params.examId));
+    const examTargetId = resolvedExam ? resolvedExam.id : params.examId;
+
     // 3. Persist to PostgreSQL with UPSERT on roll_number
     try {
       const pool = getPgPool();
+      // Ensure columns and constraints exist safely
+      await pool.query(`
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS examination_id TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS phone TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS branch TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS specialization TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS college TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS year_of_study TEXT;
+        ALTER TABLE public.students DROP CONSTRAINT IF EXISTS students_email_key;
+        ALTER TABLE public.registrations ADD COLUMN IF NOT EXISTS login_id TEXT;
+        ALTER TABLE public.registrations DROP CONSTRAINT IF EXISTS registrations_examination_id_fkey;
+      `).catch(() => {});
+
       await pool.query(`
         INSERT INTO students (id, roll_number, login_id, full_name, email, phone, branch, specialization, college, year_of_study, attributes, examination_id, created_at, updated_at)
         VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
@@ -1074,16 +1094,29 @@ export const db = {
         student.college || null,
         student.year_of_study || null,
         JSON.stringify(student.attributes || {}),
-        params.examId,
+        examTargetId,
       ]);
 
-      await pool.query(`
-        INSERT INTO registrations (id, examination_id, student_id, login_id, registered_at, status)
-        VALUES ($1, $2, $3, $4, NOW(), 'registered')
-        ON CONFLICT (id) DO UPDATE SET login_id = EXCLUDED.login_id
-      `, [registration.id, params.examId, student.id, cleanRoll]);
+      const updateRes = await pool.query(`
+        UPDATE registrations
+        SET login_id = $1, status = 'registered'
+        WHERE (examination_id = $2 OR examination_id = $3) AND student_id = $4
+      `, [cleanRoll, examTargetId, params.examId, student.id]);
+
+      if (updateRes.rowCount === 0) {
+        await pool.query(`
+          INSERT INTO registrations (id, examination_id, student_id, login_id, registered_at, status)
+          VALUES ($1, $2, $3, $4, NOW(), 'registered')
+          ON CONFLICT DO NOTHING
+        `, [registration.id, examTargetId, student.id, cleanRoll]);
+      }
     } catch (err) {
       console.warn('[PostgreSQL registerStudent error]', err);
+    }
+
+    if (resolvedExam) {
+      store.regByExamAndRoll.set(`${resolvedExam.id}_${cleanRoll}`, registration.id);
+      if (resolvedExam.slug) store.regByExamAndRoll.set(`${resolvedExam.slug}_${cleanRoll}`, registration.id);
     }
 
     resilientStorage.scheduleSave(() => store.toSnapshot());
@@ -1184,6 +1217,12 @@ export const db = {
         FROM registrations r
         JOIN students s ON s.id = r.student_id
         WHERE r.examination_id = ANY($1::text[])
+           OR r.id IN (
+             SELECT ea.registration_id 
+             FROM examination_attempts ea 
+             JOIN examination_rounds er ON er.id = ea.round_id 
+             WHERE er.examination_id = ANY($1::text[])
+           )
         ORDER BY r.registered_at ASC
       `, [targetIds]);
 
@@ -1248,6 +1287,24 @@ export const db = {
           const student = store.students.get(reg.student_id) || reg.student;
           matchedRegs.push({
             ...reg,
+            student,
+          });
+        }
+      }
+    }
+
+    // 5. Also include any registered students linked to this exam in memory
+    for (const student of store.students.values()) {
+      if (!seenStudentIds.has(student.id)) {
+        if (student.examination_id && idSet.has(student.examination_id)) {
+          seenStudentIds.add(student.id);
+          matchedRegs.push({
+            id: `reg-${exam?.id || examId}-${student.id}`,
+            examination_id: exam?.id || examId,
+            student_id: student.id,
+            login_id: student.login_id || student.roll_number,
+            registered_at: student.created_at || new Date().toISOString(),
+            status: 'registered',
             student,
           });
         }
