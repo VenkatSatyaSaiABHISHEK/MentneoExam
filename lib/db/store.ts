@@ -297,19 +297,21 @@ export const db = {
           'SELECT * FROM examination_rounds WHERE examination_id = ANY($1) ORDER BY round_number ASC',
           [examIds]
         );
+        const allTargetKeys = Array.from(new Set([...examIds, ...examRows.map((e) => e.slug).filter(Boolean)]));
         const { rows: regRows } = await queryPg(
           'SELECT examination_id, COUNT(*) as count FROM registrations WHERE examination_id = ANY($1) GROUP BY examination_id',
-          [examIds]
+          [allTargetKeys]
         );
         const regCountMap = new Map(regRows.map((r) => [r.examination_id, parseInt(r.count, 10)]));
 
         const examList: Examination[] = examRows.map((e) => {
           const rounds = roundRows.filter((r) => r.examination_id === e.id);
+          const regCount = (regCountMap.get(e.id) || 0) + (e.slug ? regCountMap.get(e.slug) || 0 : 0);
           const exObj: Examination = {
             ...e,
             rounds,
             _count: {
-              registrations: regCountMap.get(e.id) || 0,
+              registrations: regCount,
               rounds: rounds.length,
             },
           };
@@ -335,7 +337,7 @@ export const db = {
       ...ex,
       rounds: Array.from(store.rounds.values()).filter((r) => r.examination_id === ex.id),
       _count: {
-        registrations: Array.from(store.registrations.values()).filter((reg) => reg.examination_id === ex.id).length,
+        registrations: Array.from(store.registrations.values()).filter((reg) => reg.examination_id === ex.id || (ex.slug && reg.examination_id === ex.slug)).length,
         rounds: Array.from(store.rounds.values()).filter((r) => r.examination_id === ex.id).length,
       },
     }));
@@ -352,8 +354,8 @@ export const db = {
           [id]
         );
         const { rows: regCountRows } = await pool.query(
-          'SELECT COUNT(*) as count FROM registrations WHERE examination_id = $1',
-          [id]
+          'SELECT COUNT(DISTINCT id) as count FROM registrations WHERE examination_id = $1 OR examination_id = $2',
+          [id, e.slug || id]
         );
         const exObj: Examination = {
           ...e,
@@ -389,7 +391,7 @@ export const db = {
         ...exam,
         rounds,
         _count: {
-          registrations: Array.from(store.registrations.values()).filter((reg) => reg.examination_id === exam.id).length,
+          registrations: Array.from(store.registrations.values()).filter((reg) => reg.examination_id === exam.id || (exam.slug && reg.examination_id === exam.slug)).length,
           rounds: rounds.length,
         },
       };
@@ -408,7 +410,7 @@ export const db = {
       if (examRows.length > 0) {
         return this.getExaminationById(examRows[0].id);
       }
-    } catch {}
+    } catch { }
 
     let exam = Array.from(store.examinations.values()).find((e) => e.slug === slug || e.id === slug);
     if (!exam) {
@@ -639,7 +641,7 @@ export const db = {
       try {
         const pool = getPgPool();
         await pool.query('ROLLBACK');
-      } catch {}
+      } catch { }
     }
 
     const roundIds = new Set<string>();
@@ -739,7 +741,7 @@ export const db = {
           store.rounds.set(roundId, round);
           return round;
         }
-      } catch {}
+      } catch { }
 
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.rounds) {
@@ -898,7 +900,7 @@ export const db = {
         store.rounds.set(remaining[i].id, remaining[i]);
         await pool.query('UPDATE examination_rounds SET round_number = $1 WHERE id = $2', [nextNum, remaining[i].id]);
       }
-    } catch {}
+    } catch { }
 
     resilientStorage.flushSync(() => store.toSnapshot());
     return true;
@@ -959,7 +961,7 @@ export const db = {
           store.students.set(student.id, student);
           store.studentByRoll.set(cleanRoll, student.id);
         }
-      } catch {}
+      } catch { }
     }
 
     if (student) {
@@ -1022,7 +1024,7 @@ export const db = {
           store.regByExamAndRoll.set(examRollKey, registration.id);
           isNew = false;
         }
-      } catch {}
+      } catch { }
     } else {
       isNew = false;
       registration.student = student;
@@ -1127,7 +1129,7 @@ export const db = {
           store.registrations.set(reg.id, reg);
           return reg;
         }
-      } catch {}
+      } catch { }
 
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.registrations) {
@@ -1168,67 +1170,91 @@ export const db = {
   },
 
   async getRegistrationsByExamId(examId: string): Promise<Registration[]> {
-    let regs = Array.from(store.registrations.values()).filter((r) => r.examination_id === examId);
+    // 1. Resolve examination and all identifier aliases (id, slug)
+    const exam = store.examinations.get(examId) || await this.getExaminationById(examId) || await this.getExaminationBySlug(examId);
+    const idSet = new Set<string>([examId]);
+    if (exam?.id) idSet.add(exam.id);
+    if (exam?.slug) idSet.add(exam.slug);
+    const targetIds = Array.from(idSet);
 
-    if (regs.length === 0) {
-      try {
-        const { rows } = await queryPg(`
-          SELECT r.*, s.roll_number, s.full_name, s.email, s.phone, s.branch, s.specialization, s.college, s.year_of_study, s.attributes
-          FROM registrations r
-          JOIN students s ON s.id = r.student_id
-          WHERE r.examination_id = $1
-        `, [examId]);
-        if (rows.length > 0) {
-          return rows.map((row) => {
-            const student: Student = {
-              id: row.student_id,
-              roll_number: row.roll_number,
-              login_id: row.login_id || row.roll_number,
-              full_name: row.full_name,
-              email: row.email,
-              phone: row.phone || undefined,
-              branch: row.branch || undefined,
-              specialization: row.specialization || undefined,
-              college: row.college || undefined,
-              year_of_study: row.year_of_study || undefined,
-              attributes: row.attributes || {},
-              created_at: row.registered_at,
-            };
-            store.students.set(student.id, student);
-            if (student.roll_number) {
-              if (!store.studentByRoll) store.studentByRoll = new Map();
-              store.studentByRoll.set(student.roll_number.trim().toUpperCase(), student.id);
-            }
-            const reg: Registration = {
-              id: row.id,
-              examination_id: row.examination_id,
-              student_id: row.student_id,
-              login_id: row.login_id,
-              registered_at: row.registered_at,
-              status: row.status,
-              student,
-            };
-            store.registrations.set(reg.id, reg);
-            return reg;
-          });
+    // 2. Query PostgreSQL to ensure newly registered candidates are ALWAYS loaded
+    try {
+      const { rows } = await queryPg(`
+        SELECT r.*, s.roll_number, s.login_id as s_login_id, s.full_name, s.email, s.phone, s.branch, s.specialization, s.college, s.year_of_study, s.attributes
+        FROM registrations r
+        JOIN students s ON s.id = r.student_id
+        WHERE r.examination_id = ANY($1::text[])
+        ORDER BY r.registered_at ASC
+      `, [targetIds]);
+
+      if (rows && rows.length > 0) {
+        for (const row of rows) {
+          const student: Student = {
+            id: row.student_id,
+            roll_number: row.roll_number,
+            login_id: row.login_id || row.s_login_id || row.roll_number,
+            full_name: row.full_name,
+            email: row.email,
+            phone: row.phone || undefined,
+            branch: row.branch || undefined,
+            specialization: row.specialization || undefined,
+            college: row.college || undefined,
+            year_of_study: row.year_of_study || undefined,
+            attributes: row.attributes || {},
+            created_at: row.registered_at,
+          };
+          store.students.set(student.id, student);
+          if (student.roll_number) {
+            if (!store.studentByRoll) store.studentByRoll = new Map();
+            store.studentByRoll.set(student.roll_number.trim().toUpperCase(), student.id);
+          }
+          const reg: Registration = {
+            id: row.id,
+            examination_id: exam?.id || row.examination_id,
+            student_id: row.student_id,
+            login_id: row.login_id || row.s_login_id || row.roll_number,
+            registered_at: row.registered_at,
+            status: row.status || 'registered',
+            student,
+          };
+          store.registrations.set(reg.id, reg);
+          if (!store.regByExamAndRoll) store.regByExamAndRoll = new Map();
+          if (reg.login_id) {
+            store.regByExamAndRoll.set(`${reg.examination_id}_${reg.login_id.trim().toUpperCase()}`, reg.id);
+            if (exam?.id) store.regByExamAndRoll.set(`${exam.id}_${reg.login_id.trim().toUpperCase()}`, reg.id);
+          }
         }
-      } catch (err) {
-        console.warn('[PostgreSQL getRegistrationsByExamId error]', err);
       }
+    } catch (err) {
+      console.warn('[PostgreSQL getRegistrationsByExamId error]', err);
     }
 
-    if (regs.length === 0) {
+    // 3. Fallback to resilient storage snapshot if empty
+    if (store.registrations.size === 0) {
       const snap = resilientStorage.loadSnapshot();
       if (snap && snap.registrations) {
         store.hydrate(snap);
-        regs = Array.from(store.registrations.values()).filter((r) => r.examination_id === examId);
       }
     }
 
-    return regs.map((r) => ({
-      ...r,
-      student: store.students.get(r.student_id) || r.student,
-    }));
+    // 4. Return all registrations matching this exam, deduplicated by student_id
+    const matchedRegs: Registration[] = [];
+    const seenStudentIds = new Set<string>();
+
+    for (const reg of store.registrations.values()) {
+      if (idSet.has(reg.examination_id)) {
+        if (!seenStudentIds.has(reg.student_id)) {
+          seenStudentIds.add(reg.student_id);
+          const student = store.students.get(reg.student_id) || reg.student;
+          matchedRegs.push({
+            ...reg,
+            student,
+          });
+        }
+      }
+    }
+
+    return matchedRegs;
   },
 
   async deleteRegistration(registrationId: string): Promise<boolean> {
@@ -1718,25 +1744,32 @@ export const db = {
   },
 
   async clearStudentRoster(examId: string): Promise<boolean> {
+    const exam = store.examinations.get(examId) || await this.getExaminationById(examId) || await this.getExaminationBySlug(examId);
+    const idSet = new Set<string>([examId]);
+    if (exam?.id) idSet.add(exam.id);
+    if (exam?.slug) idSet.add(exam.slug);
+    const targetIds = Array.from(idSet);
+
     const regIdsToDelete: string[] = [];
     store.registrations.forEach((r, id) => {
-      if (r.examination_id === examId) {
+      if (idSet.has(r.examination_id)) {
         regIdsToDelete.push(id);
       }
     });
     regIdsToDelete.forEach((id) => store.registrations.delete(id));
 
-    const exam = store.examinations.get(examId);
     if (exam) {
       exam.roster_count = 0;
-      store.examinations.set(examId, exam);
+      store.examinations.set(exam.id, exam);
     }
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
     try {
       const pool = getPgPool();
-      await pool.query('DELETE FROM registrations WHERE examination_id = $1', [examId]);
-      await pool.query('UPDATE examinations SET roster_count = 0, updated_at = NOW() WHERE id = $1', [examId]);
+      await pool.query('DELETE FROM registrations WHERE examination_id = ANY($1::text[])', [targetIds]);
+      if (exam?.id) {
+        await pool.query('UPDATE examinations SET roster_count = 0, updated_at = NOW() WHERE id = $1', [exam.id]);
+      }
     } catch (err) {
       console.warn('[PostgreSQL clearStudentRoster sync error]', err);
     }
@@ -1746,6 +1779,8 @@ export const db = {
 
   async getExamStudentStats(examId: string): Promise<{ registered: number; attempted: number; notWritten: number }> {
     try {
+      const exam = store.examinations.get(examId) || await this.getExaminationById(examId) || await this.getExaminationBySlug(examId);
+      const targetIds = Array.from(new Set([examId, exam?.id, exam?.slug].filter(Boolean))) as string[];
       const regs = await this.getRegistrationsByExamId(examId);
       const registered = regs.length;
 
@@ -1755,8 +1790,8 @@ export const db = {
           `SELECT COUNT(DISTINCT ea.registration_id) as count 
            FROM examination_attempts ea
            JOIN examination_rounds er ON er.id = ea.round_id
-           WHERE er.examination_id = $1`,
-          [examId]
+           WHERE er.examination_id = ANY($1::text[])`,
+          [targetIds]
         );
         attempted = parseInt(rows[0]?.count || '0', 10);
       } catch {
@@ -2405,7 +2440,7 @@ export const db = {
             if (pgRes.length > 0) {
               prevResult = pgRes[0] as any;
             }
-          } catch {}
+          } catch { }
         }
 
         if (!prevResult) {
@@ -2453,7 +2488,7 @@ export const db = {
           store.attempts.set(existing.id, existing);
           store.attemptByRegAndRound.set(regRoundKey, existing.id);
         }
-      } catch {}
+      } catch { }
     }
 
     // Unbiased Fisher-Yates shuffle algorithm
@@ -2508,7 +2543,7 @@ export const db = {
             'UPDATE examination_attempts SET assigned_question_ids = $1 WHERE id = $2',
             [JSON.stringify(assigned), existing.id]
           );
-        } catch {}
+        } catch { }
       }
 
       let questions = assigned
@@ -2888,7 +2923,7 @@ export const db = {
         'UPDATE examination_attempts SET cheating_warnings = $1, status = $2, submitted_at = $3 WHERE id = $4',
         [warningNumber, attempt.status, attempt.submitted_at, attempt.id]
       );
-    } catch {}
+    } catch { }
 
     return { warningNumber, maxWarnings, isTerminated };
   },
@@ -2994,7 +3029,7 @@ export const db = {
                 answer = dbAns[0] as AttemptAnswer;
                 store.answers.set(key, answer);
               }
-            } catch {}
+            } catch { }
           }
           if (answer && answer.code_snippet && answer.code_snippet.trim().length > 15) {
             codeAnswered++;
@@ -3027,7 +3062,7 @@ export const db = {
                   store.answers.set(`${attemptId}_${a.question_id}`, a);
                 }
               }
-            } catch {}
+            } catch { }
           }
 
           const answer = store.answers.get(key);
@@ -3159,7 +3194,7 @@ export const db = {
           };
           store.results.set(attemptId, res);
         }
-      } catch {}
+      } catch { }
     }
     return res || null;
   },
@@ -3188,7 +3223,7 @@ export const db = {
           };
           store.attempts.set(attemptId, attempt);
         }
-      } catch {}
+      } catch { }
     }
     if (attempt && attempt.status === 'in_progress' && attempt.deadline_at && Date.now() >= new Date(attempt.deadline_at).getTime()) {
       try {
@@ -3238,7 +3273,7 @@ export const db = {
         unqualifiedStudents,
         pendingOcrJobs,
       };
-    } catch {}
+    } catch { }
 
     const totalExaminations = store.examinations.size;
     const totalStudents = store.students.size;
@@ -3312,7 +3347,7 @@ export const db = {
           attemptsMap.set(attemptObj.id, attemptObj);
           store.attempts.set(attemptObj.id, attemptObj);
         }
-      } catch {}
+      } catch { }
     }
 
     // 3. Fetch all examination results from PostgreSQL & Memory
@@ -3348,7 +3383,7 @@ export const db = {
           resultsMap.set(resObj.attempt_id, resObj);
           store.results.set(resObj.attempt_id, resObj);
         }
-      } catch {}
+      } catch { }
     }
 
     // Auto-finalize any attempt whose authoritative deadline has expired
@@ -3390,7 +3425,7 @@ export const db = {
             }
           }
         }
-      } catch {}
+      } catch { }
     }
 
     const monitoringRows: any[] = [];
@@ -3535,7 +3570,7 @@ export const db = {
           [registrationId]
         );
         if (rows.length > 0) reg = rows[0] as any;
-      } catch {}
+      } catch { }
     }
     if (!reg) throw new Error('Registration record not found');
     const student = reg.student || store.students.get(reg.student_id);
@@ -3576,7 +3611,7 @@ export const db = {
           });
         }
       }
-    } catch {}
+    } catch { }
 
     // Fetch results for this registration from PostgreSQL & Memory
     let regResults: ExaminationResult[] = [];
@@ -3610,7 +3645,7 @@ export const db = {
           });
         }
       }
-    } catch {}
+    } catch { }
 
     // Fetch all answers for these attempts from PostgreSQL & Memory
     const allAttemptIds = regAttempts.map((a) => a.id);
@@ -3627,7 +3662,7 @@ export const db = {
             regAnswers.push(ans);
           }
         }
-      } catch {}
+      } catch { }
     }
 
     for (const round of rounds) {
@@ -3717,21 +3752,21 @@ export const db = {
         qualifyingMarks: round.qualifying_marks,
         attempt: attempt
           ? {
-              id: attempt.id,
-              status: attempt.status,
-              startedAt: attempt.started_at,
-              submittedAt: attempt.submitted_at,
-              cheatingWarnings: attempt.cheating_warnings,
-            }
+            id: attempt.id,
+            status: attempt.status,
+            startedAt: attempt.started_at,
+            submittedAt: attempt.submitted_at,
+            cheatingWarnings: attempt.cheating_warnings,
+          }
           : null,
         result: result
           ? {
-              score: result.score,
-              isQualified: result.is_qualified,
-              correctCount: result.correct_count,
-              wrongCount: result.wrong_count,
-              unansweredCount: result.unanswered_count,
-            }
+            score: result.score,
+            isQualified: result.is_qualified,
+            correctCount: result.correct_count,
+            wrongCount: result.wrong_count,
+            unansweredCount: result.unanswered_count,
+          }
           : null,
         isQualified: qualification ? qualification.qualified : result ? result.is_qualified : null,
         stats: {
@@ -3804,7 +3839,7 @@ export const db = {
           [registrationId]
         );
         if (rows.length > 0) reg = rows[0] as any;
-      } catch {}
+      } catch { }
     }
     if (!reg) throw new Error('Registration not found');
 
@@ -3819,7 +3854,7 @@ export const db = {
           [reg.id, roundId]
         );
         if (attData.length > 0) attempt = attData[0] as any;
-      } catch {}
+      } catch { }
     }
 
     if (!attempt) {
@@ -4089,7 +4124,7 @@ export const db = {
           questions_count: poolQuestions.length,
         };
       }
-    } catch {}
+    } catch { }
 
     // Fall back to ocrJobs
     const jobs = Array.from(store.ocrJobs.values()).filter(
@@ -4125,7 +4160,7 @@ export const db = {
           });
         });
       }
-    } catch {}
+    } catch { }
     return Array.from(store.ocrJobs.values()).sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
@@ -4159,7 +4194,7 @@ export const db = {
     let dispatchedToExternal = false;
     const isLocalhost = Boolean(
       process.env.OCR_SERVICE_URL &&
-        (process.env.OCR_SERVICE_URL.includes('localhost') || process.env.OCR_SERVICE_URL.includes('127.0.0.1'))
+      (process.env.OCR_SERVICE_URL.includes('localhost') || process.env.OCR_SERVICE_URL.includes('127.0.0.1'))
     );
 
     const isCloudEnv = Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');

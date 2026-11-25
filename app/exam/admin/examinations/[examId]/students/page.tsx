@@ -110,28 +110,13 @@ function AdminStudentsContent() {
       // Fetch students
       const res = await fetch(`/api/examinations/${examId}/students`);
       const json = await res.json();
-      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+      if (json.success && Array.isArray(json.data)) {
         setRegistrations(json.data);
         if (typeof window !== 'undefined') {
           try {
             localStorage.setItem(`mentneo_students_${examId}`, JSON.stringify(json.data));
           } catch {}
         }
-      } else if (localRegs.length > 0) {
-        // If serverless container is fresh and returned 0, NEVER overwrite non-empty local roster!
-        setRegistrations(localRegs);
-        // Sync cached candidates to this container in the background
-        localRegs.forEach((r) => {
-          fetch(`/api/examinations/${examId}/students`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              fullName: r.student?.full_name || `Candidate ${r.login_id}`,
-              rollNumber: r.login_id,
-              email: r.student?.email,
-            }),
-          }).catch(() => {});
-        });
       }
     } catch {
       toast.error('Failed to load registered candidates.');
