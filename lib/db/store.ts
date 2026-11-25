@@ -1557,19 +1557,20 @@ export const db = {
     if (params.remotePin !== undefined) exam.remote_pin = params.remotePin;
     exam.updated_at = new Date().toISOString();
 
-    store.examinations.set(params.examId, exam);
+    store.examinations.set(exam.id, exam);
+    if (exam.slug) store.examinations.set(exam.slug, exam);
     resilientStorage.scheduleSave(() => store.toSnapshot());
 
     try {
       const pool = getPgPool();
       await pool.query(
-        'UPDATE examinations SET admission_locked = $1, status = $2, emergency_announcement = $3, remote_pin = $4, updated_at = NOW() WHERE id = $5',
+        'UPDATE examinations SET admission_locked = $1, status = $2, emergency_announcement = $3, remote_pin = $4, updated_at = NOW() WHERE id = $5 OR slug = $5',
         [
           exam.admission_locked ?? false,
           exam.status,
           exam.emergency_announcement ?? null,
           exam.remote_pin ?? '12345678',
-          params.examId,
+          exam.id,
         ]
       );
     } catch (err) {
@@ -1624,7 +1625,7 @@ export const db = {
             att = rows[0] as ExaminationAttempt;
             store.attempts.set(att.id, att);
           }
-        } catch {}
+        } catch { }
       }
 
       if (!att) {
@@ -1647,7 +1648,7 @@ export const db = {
                 [params.registrationId, prevRound.id]
               );
               if (rows.length > 0) prevAtt = rows[0] as ExaminationAttempt;
-            } catch {}
+            } catch { }
           }
           const prevEndTime = prevAtt?.submitted_at ? new Date(prevAtt.submitted_at).getTime() : new Date(prevAtt?.deadline_at || Date.now()).getTime();
           const delaySec = prevRound.next_round_delay_seconds || 60;
@@ -2662,7 +2663,7 @@ export const db = {
             if (rows.length > 0) {
               prevAttempt = rows[0] as ExaminationAttempt;
             }
-          } catch {}
+          } catch { }
         }
 
         if (prevAttempt && prevAttempt.status === 'in_progress' && prevAttempt.deadline_at && Date.now() >= new Date(prevAttempt.deadline_at).getTime()) {
@@ -3229,7 +3230,7 @@ export const db = {
       try {
         await this.submitAttempt(attempt.id, true);
         attempt = store.attempts.get(attemptId) || attempt;
-      } catch {}
+      } catch { }
     }
     return attempt || null;
   },

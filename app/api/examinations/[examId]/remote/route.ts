@@ -66,6 +66,7 @@ export async function GET(
           studentName: r.studentName,
           rollNumber: r.rollNumber,
           loginId: r.loginId,
+          email: r.email,
           roundId: r.roundId,
           roundName: r.roundName,
           roundNumber: r.roundNumber,

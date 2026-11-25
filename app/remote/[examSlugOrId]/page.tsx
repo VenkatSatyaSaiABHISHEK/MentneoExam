@@ -3,28 +3,36 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ShieldAlert,
-  ShieldCheck,
   Radio,
+  Users,
+  Megaphone,
+  Settings2,
   Play,
   Pause,
   StopCircle,
-  Users,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  RefreshCw,
-  Copy,
+  FileEdit,
+  ShieldCheck,
+  ShieldAlert,
   Lock,
   Unlock,
   KeyRound,
-  ChevronRight,
+  RefreshCw,
+  Copy,
+  Clock,
   Search,
-  Megaphone,
-  PlusCircle,
+  CheckCircle2,
   AlertTriangle,
   ArrowRight,
   ExternalLink,
+  PlusCircle,
+  Eye,
+  EyeOff,
+  Send,
+  X,
+  Check,
+  Award,
+  AlertCircle,
+  GraduationCap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -32,6 +40,16 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { formatTimeRemaining } from '@/lib/utils';
+
+// Double Confirmation Modal State
+interface ConfirmModalState {
+  isOpen: boolean;
+  title: string;
+  description: string;
+  confirmText: string;
+  confirmVariant: 'danger' | 'warning' | 'primary';
+  onConfirm: () => Promise<void> | void;
+}
 
 function ExamRemoteContent() {
   const params = useParams();
@@ -45,23 +63,40 @@ function ExamRemoteContent() {
   const [verifyingPin, setVerifyingPin] = React.useState(false);
   const [pinError, setPinError] = React.useState('');
 
-  // Remote controller state
+  // Mobile App Navigation Tab: 'live' | 'students' | 'announce' | 'settings'
+  const [activeNav, setActiveNav] = React.useState<'live' | 'students' | 'announce' | 'settings'>('live');
+
+  // Remote telemetry state
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [remoteData, setRemoteData] = React.useState<any>(null);
-  const [activeTab, setActiveTab] = React.useState<string>('all');
-  const [candidateFilter, setCandidateFilter] = React.useState<string>('all');
-  const [searchQuery, setSearchQuery] = React.useState('');
 
-  // Modals & Action States
-  const [broadcastModalOpen, setBroadcastModalOpen] = React.useState(false);
+  // Students Tab State
+  const [studentSearch, setStudentSearch] = React.useState('');
+  const [studentFilter, setStudentFilter] = React.useState<'all' | 'writing' | 'registered' | 'submitted' | 'qualified'>('all');
+
+  // Announcement State
   const [announcementText, setAnnouncementText] = React.useState('');
+  const [sendingAnnouncement, setSendingAnnouncement] = React.useState(false);
+
+  // Settings & PIN Edit State
   const [pinModalOpen, setPinModalOpen] = React.useState(false);
   const [newPinInput, setNewPinInput] = React.useState('');
-  const [togglingAdmission, setTogglingAdmission] = React.useState(false);
-  const [updatingStatus, setUpdatingStatus] = React.useState(false);
+  const [showCurrentPin, setShowCurrentPin] = React.useState(false);
+  const [savingPin, setSavingPin] = React.useState(false);
 
-  // Check sessionStorage for cached remote PIN
+  // Double Confirmation Modal State
+  const [confirmModal, setConfirmModal] = React.useState<ConfirmModalState>({
+    isOpen: false,
+    title: '',
+    description: '',
+    confirmText: 'Confirm',
+    confirmVariant: 'primary',
+    onConfirm: () => {},
+  });
+  const [confirmExecuting, setConfirmExecuting] = React.useState(false);
+
+  // Restore cached PIN
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedPin = sessionStorage.getItem(`remote_pin_${examSlugOrId}`);
@@ -72,11 +107,12 @@ function ExamRemoteContent() {
     }
   }, [examSlugOrId]);
 
-  // Fetch remote telemetry data
+  // Fetch telemetry from remote API
   const fetchRemoteData = React.useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const activePin = pin || (typeof window !== 'undefined' ? sessionStorage.getItem(`remote_pin_${examSlugOrId}`) : '') || '12345678';
+      const activePin =
+        pin || (typeof window !== 'undefined' ? sessionStorage.getItem(`remote_pin_${examSlugOrId}`) : '') || '12345678';
       const res = await fetch(`/api/examinations/${examSlugOrId}/remote?pin=${encodeURIComponent(activePin)}`, {
         headers: { 'x-remote-pin': activePin },
       });
@@ -104,7 +140,7 @@ function ExamRemoteContent() {
     }
   }, [examSlugOrId, pin]);
 
-  // Initial load and periodic polling every 4 seconds
+  // Polling loop every 4 seconds when unlocked
   React.useEffect(() => {
     if (isUnlocked) {
       fetchRemoteData();
@@ -117,12 +153,42 @@ function ExamRemoteContent() {
     }
   }, [isUnlocked, fetchRemoteData]);
 
-  // Handle PIN Unlock Submit
+  // Trigger double confirmation modal helper
+  const promptConfirmation = (options: {
+    title: string;
+    description: string;
+    confirmText: string;
+    confirmVariant: 'danger' | 'warning' | 'primary';
+    action: () => Promise<void> | void;
+  }) => {
+    setConfirmModal({
+      isOpen: true,
+      title: options.title,
+      description: options.description,
+      confirmText: options.confirmText,
+      confirmVariant: options.confirmVariant,
+      onConfirm: options.action,
+    });
+  };
+
+  const handleExecuteConfirmedAction = async () => {
+    setConfirmExecuting(true);
+    try {
+      await confirmModal.onConfirm();
+    } catch {
+      toast.error('Operation failed.');
+    } finally {
+      setConfirmExecuting(false);
+      setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+    }
+  };
+
+  // PIN Unlock submit
   const handleUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
     const clean = pinInput.trim();
     if (!clean) {
-      setPinError('Please enter your 8-digit remote PIN.');
+      setPinError('Please enter the remote access PIN.');
       return;
     }
 
@@ -150,7 +216,7 @@ function ExamRemoteContent() {
       if (typeof window !== 'undefined') {
         sessionStorage.setItem(`remote_pin_${examSlugOrId}`, clean);
       }
-      toast.success('Exam Remote Control Unlocked.');
+      toast.success('Remote Control Unlocked.');
     } catch {
       setPinError('Network verification failed. Please try again.');
     } finally {
@@ -158,161 +224,249 @@ function ExamRemoteContent() {
     }
   };
 
-  // Toggle Candidate Admission (Open / Locked)
-  const handleToggleAdmission = async () => {
-    if (!remoteData?.exam || togglingAdmission) return;
-    const currentLocked = Boolean(remoteData.exam.admission_locked);
-    const nextLocked = !currentLocked;
+  // Lock remote and sign out
+  const handleLockRemote = () => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem(`remote_pin_${examSlugOrId}`);
+    }
+    setPin('');
+    setPinInput('');
+    setIsUnlocked(false);
+    toast.info('Remote locked.');
+  };
 
-    setTogglingAdmission(true);
-    try {
-      const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin,
-          action: 'toggle_admission',
-          data: { locked: nextLocked },
-        }),
-      });
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
-        toast.error(json.error || 'Failed to update admission status.');
-        return;
-      }
-
-      setRemoteData((prev: any) => ({
-        ...prev,
-        exam: { ...prev.exam, admission_locked: nextLocked },
-      }));
-      toast.success(nextLocked ? 'Candidate Admission FROZEN.' : 'Candidate Admission OPENED.');
-    } catch {
-      toast.error('Network error updating admission switch.');
-    } finally {
-      setTogglingAdmission(false);
+  // Copy remote URL to clipboard
+  const handleCopyLink = () => {
+    if (typeof window !== 'undefined') {
+      navigator.clipboard.writeText(window.location.href);
+      toast.success('Remote URL copied to clipboard.');
     }
   };
 
-  // Change Exam Status (LIVE / PAUSED / COMPLETED / DRAFT)
-  const handleSetStatus = async (newStatus: string) => {
-    if (!remoteData?.exam || updatingStatus) return;
-    setUpdatingStatus(true);
-    try {
-      const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin,
-          action: 'set_status',
-          data: { status: newStatus },
-        }),
-      });
-      const json = await res.json();
+  // Toggle admission with Double Confirmation
+  const requestToggleAdmission = () => {
+    if (!remoteData?.exam) return;
+    const isCurrentlyLocked = Boolean(remoteData.exam.admission_locked);
+    const targetLocked = !isCurrentlyLocked;
 
-      if (!res.ok || !json.success) {
-        toast.error(json.error || 'Failed to update status.');
-        return;
-      }
-
-      setRemoteData((prev: any) => ({
-        ...prev,
-        exam: { ...prev.exam, status: newStatus },
-      }));
-      toast.success(`Exam status set to ${newStatus.toUpperCase()}`);
-    } catch {
-      toast.error('Failed to change exam status.');
-    } finally {
-      setUpdatingStatus(false);
-    }
+    promptConfirmation({
+      title: targetLocked ? 'Confirm Stop Admissions' : 'Confirm Open Admissions',
+      description: targetLocked
+        ? 'Are you sure you want to CLOSE candidate admission? Candidates attempting to register or log in will be blocked until you reopen entry.'
+        : 'Are you sure you want to OPEN candidate admission? Students with the exam link will be able to register and enter.',
+      confirmText: targetLocked ? 'Yes, Close Admissions' : 'Yes, Open Admissions',
+      confirmVariant: targetLocked ? 'danger' : 'primary',
+      action: async () => {
+        const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pin,
+            action: 'toggle_admission',
+            data: { locked: targetLocked },
+          }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          setRemoteData((prev: any) => ({
+            ...prev,
+            exam: { ...prev.exam, admission_locked: targetLocked },
+          }));
+          toast.success(targetLocked ? 'Candidate admission closed.' : 'Candidate admission opened.');
+        } else {
+          toast.error(json.error || 'Failed to update admission status.');
+        }
+      },
+    });
   };
 
-  // Broadcast Emergency Alert Announcement
-  const handleBroadcastAnnouncement = async () => {
-    try {
-      const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin,
-          action: 'set_announcement',
-          data: { message: announcementText.trim() },
-        }),
-      });
-      const json = await res.json();
+  // Change exam status with Double Confirmation
+  const requestSetStatus = (newStatus: 'live' | 'paused' | 'completed' | 'draft') => {
+    if (!remoteData?.exam || remoteData.exam.status === newStatus) return;
 
-      if (!res.ok || !json.success) {
-        toast.error(json.error || 'Failed to broadcast alert.');
-        return;
-      }
+    const descriptions: Record<string, string> = {
+      live: 'Activate this examination session. Eligible candidates will be able to start and submit rounds.',
+      paused: 'Pause this examination. Students will temporarily be blocked from progressing until resumed.',
+      completed: 'Stop and conclude this examination session. All ongoing attempts will be finalized.',
+      draft: 'Switch exam status back to DRAFT mode.',
+    };
 
-      setRemoteData((prev: any) => ({
-        ...prev,
-        exam: { ...prev.exam, emergency_announcement: announcementText.trim() || null },
-      }));
-      setBroadcastModalOpen(false);
-      toast.success(announcementText.trim() ? 'Emergency alert broadcast to candidates.' : 'Alert cleared.');
-    } catch {
-      toast.error('Network failure sending announcement.');
-    }
+    const variants: Record<string, 'danger' | 'warning' | 'primary'> = {
+      live: 'primary',
+      paused: 'warning',
+      completed: 'danger',
+      draft: 'warning',
+    };
+
+    promptConfirmation({
+      title: `Confirm Status Change: ${newStatus.toUpperCase()}`,
+      description: descriptions[newStatus] || 'Change the operational state of this examination.',
+      confirmText: `Yes, Set to ${newStatus.toUpperCase()}`,
+      confirmVariant: variants[newStatus] || 'primary',
+      action: async () => {
+        const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pin,
+            action: 'set_status',
+            data: { status: newStatus },
+          }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          setRemoteData((prev: any) => ({
+            ...prev,
+            exam: { ...prev.exam, status: newStatus },
+          }));
+          toast.success(`Exam status set to ${newStatus.toUpperCase()}.`);
+        } else {
+          toast.error(json.error || 'Failed to update exam status.');
+        }
+      },
+    });
   };
 
-  // Grant Extra Time (+5 Mins)
-  const handleExtendTime = async (attemptId: string) => {
-    try {
-      const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin,
-          action: 'extend_time',
-          data: { attemptId, minutes: 5 },
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        toast.error(json.error || 'Failed to grant extra time.');
-        return;
-      }
-      toast.success('+5 minutes added to candidate session.');
-      fetchRemoteData(true);
-    } catch {
-      toast.error('Failed to communicate with exam server.');
+  // Broadcast announcement with Double Confirmation
+  const requestBroadcastAnnouncement = () => {
+    const text = announcementText.trim();
+    if (!text) {
+      toast.error('Please enter an announcement message.');
+      return;
     }
+
+    promptConfirmation({
+      title: 'Confirm Proctor Public Announcement',
+      description: `This message will immediately appear as an emergency banner on all candidate screens: "${text}"`,
+      confirmText: 'Broadcast Alert Now',
+      confirmVariant: 'primary',
+      action: async () => {
+        setSendingAnnouncement(true);
+        try {
+          const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pin,
+              action: 'set_announcement',
+              data: { message: text },
+            }),
+          });
+          const json = await res.json();
+          if (json.success) {
+            setRemoteData((prev: any) => ({
+              ...prev,
+              exam: { ...prev.exam, emergency_announcement: text },
+            }));
+            setAnnouncementText('');
+            toast.success('Emergency announcement broadcast to candidates.');
+          } else {
+            toast.error(json.error || 'Failed to broadcast announcement.');
+          }
+        } finally {
+          setSendingAnnouncement(false);
+        }
+      },
+    });
   };
 
-  // Force Submit Attempt
-  const handleForceSubmit = async (attemptId: string) => {
-    if (!confirm('Are you sure you want to finalize and auto-submit this candidate attempt?')) return;
-    try {
-      const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin,
-          action: 'force_submit',
-          data: { attemptId },
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        toast.error(json.error || 'Failed to force submit.');
-        return;
-      }
-      toast.success('Candidate attempt finalized and evaluated.');
-      fetchRemoteData(true);
-    } catch {
-      toast.error('Failed to submit candidate attempt.');
-    }
+  // Clear announcement with Double Confirmation
+  const requestClearAnnouncement = () => {
+    promptConfirmation({
+      title: 'Clear Active Public Announcement',
+      description: 'Remove the proctor emergency announcement banner from candidate screens?',
+      confirmText: 'Yes, Clear Alert',
+      confirmVariant: 'warning',
+      action: async () => {
+        const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pin,
+            action: 'set_announcement',
+            data: { message: null },
+          }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          setRemoteData((prev: any) => ({
+            ...prev,
+            exam: { ...prev.exam, emergency_announcement: null },
+          }));
+          toast.success('Emergency alert banner cleared.');
+        } else {
+          toast.error(json.error || 'Failed to clear announcement.');
+        }
+      },
+    });
+  };
+
+  // Grant +5 Minutes with Double Confirmation
+  const requestExtendTime = (candidate: any) => {
+    promptConfirmation({
+      title: `Grant Extra Time (+5 Min)`,
+      description: `Add +5 extra minutes to ${candidate.studentName} (${candidate.rollNumber})? Their deadline will be automatically extended on the server.`,
+      confirmText: 'Yes, Grant +5 Min',
+      confirmVariant: 'primary',
+      action: async () => {
+        const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pin,
+            action: 'extend_time',
+            data: { attemptId: candidate.attemptId, minutes: 5 },
+          }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          toast.success(`Granted +5 minutes to ${candidate.studentName}.`);
+          fetchRemoteData(true);
+        } else {
+          toast.error(json.error || 'Failed to grant time.');
+        }
+      },
+    });
+  };
+
+  // Force Submit with Double Confirmation
+  const requestForceSubmit = (candidate: any) => {
+    promptConfirmation({
+      title: `Confirm Force Submission`,
+      description: `Are you sure you want to finalize and force-submit ${candidate.studentName}'s examination? Their current answers will be graded and the attempt locked immediately.`,
+      confirmText: 'Yes, Force Submit',
+      confirmVariant: 'danger',
+      action: async () => {
+        const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pin,
+            action: 'force_submit',
+            data: { attemptId: candidate.attemptId },
+          }),
+        });
+        const json = await res.json();
+        if (json.success) {
+          toast.success(`Attempt force-submitted for ${candidate.studentName}.`);
+          fetchRemoteData(true);
+        } else {
+          toast.error(json.error || 'Failed to force submit attempt.');
+        }
+      },
+    });
   };
 
   // Update Remote PIN
-  const handleUpdatePin = async () => {
+  const handleSavePin = async (e: React.FormEvent) => {
+    e.preventDefault();
     const clean = newPinInput.trim();
     if (clean.length < 4 || clean.length > 12) {
-      toast.error('PIN must be 4 to 12 digits.');
+      toast.error('PIN must be between 4 and 12 digits.');
       return;
     }
+
+    setSavingPin(true);
     try {
       const res = await fetch(`/api/examinations/${examSlugOrId}/remote`, {
         method: 'POST',
@@ -324,75 +478,103 @@ function ExamRemoteContent() {
         }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) {
+      if (json.success) {
+        setPin(clean);
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(`remote_pin_${examSlugOrId}`, clean);
+        }
+        setRemoteData((prev: any) => ({
+          ...prev,
+          exam: { ...prev.exam, remote_pin: clean },
+        }));
+        setPinModalOpen(false);
+        setNewPinInput('');
+        toast.success(`Remote access PIN updated to ${clean}`);
+      } else {
         toast.error(json.error || 'Failed to update PIN.');
-        return;
       }
-      setPin(clean);
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem(`remote_pin_${examSlugOrId}`, clean);
-      }
-      setPinModalOpen(false);
-      setNewPinInput('');
-      toast.success('Remote Access PIN updated.');
-    } catch {
-      toast.error('Network failure updating PIN.');
+    } finally {
+      setSavingPin(false);
     }
   };
 
-  // Copy remote link to clipboard
-  const handleCopyRemoteLink = () => {
-    if (typeof window !== 'undefined') {
-      const url = window.location.href;
-      navigator.clipboard.writeText(url);
-      toast.success('Remote Control URL copied to clipboard.');
-    }
+  // Generate random 6-digit PIN helper
+  const generateRandomPin = () => {
+    const random = Math.floor(100000 + Math.random() * 900000).toString();
+    setNewPinInput(random);
   };
 
-  // PIN Gate Screen
+  // Candidate filtering
+  const allCandidates = remoteData?.candidates || [];
+  const filteredCandidates = allCandidates.filter((c: any) => {
+    // Status filter
+    if (studentFilter === 'writing' && c.attemptStatus !== 'in_progress') return false;
+    if (studentFilter === 'registered' && c.attemptStatus !== 'registered') return false;
+    if (studentFilter === 'submitted' && c.attemptStatus !== 'submitted' && c.attemptStatus !== 'timed_out') return false;
+    if (studentFilter === 'qualified' && c.isQualified !== true) return false;
+
+    // Search query
+    if (studentSearch.trim()) {
+      const q = studentSearch.toLowerCase();
+      const name = (c.studentName || '').toLowerCase();
+      const roll = (c.rollNumber || c.loginId || '').toLowerCase();
+      const email = (c.email || '').toLowerCase();
+      return name.includes(q) || roll.includes(q) || email.includes(q);
+    }
+    return true;
+  });
+
+  const writingCount = allCandidates.filter((c: any) => c.attemptStatus === 'in_progress').length;
+  const registeredCount = allCandidates.filter((c: any) => c.attemptStatus === 'registered').length;
+  const submittedCount = allCandidates.filter((c: any) => c.attemptStatus === 'submitted' || c.attemptStatus === 'timed_out').length;
+  const qualifiedCount = allCandidates.filter((c: any) => c.isQualified === true).length;
+
+  // 1. PIN Lock Screen (White & Classical)
   if (!isUnlocked) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4">
-        <div className="w-full max-w-sm bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-md space-y-6">
-          <div className="text-center space-y-2">
-            <div className="w-14 h-14 bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
-              <Radio className="w-7 h-7 animate-pulse" />
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-white">Exam Remote Control</h1>
-            <p className="text-xs text-slate-400">
-              Enter the authorized access PIN to remotely control this live examination session.
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-sm bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-xs text-center space-y-6">
+          <div className="w-14 h-14 rounded-2xl bg-slate-900 text-white flex items-center justify-center mx-auto shadow-xs">
+            <Radio className="w-7 h-7 text-emerald-400" />
+          </div>
+
+          <div>
+            <h1 className="text-xl font-bold text-slate-900 tracking-tight">Exam Remote Control</h1>
+            <p className="text-xs text-slate-500 mt-1">
+              Enter your authorized invigilator PIN to access examination controls.
             </p>
           </div>
 
           <form onSubmit={handleUnlock} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-300 block">Operator PIN</label>
+            <div className="space-y-1.5 text-left">
+              <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider">
+                Remote Access PIN
+              </label>
               <Input
                 type="password"
                 inputMode="numeric"
                 maxLength={12}
-                placeholder="Enter 8-digit PIN (default 12345678)"
+                placeholder="Enter 4-8 digit PIN"
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
-                className="bg-slate-950 border-slate-700 text-center tracking-widest text-lg font-mono text-white focus:border-indigo-500 h-12"
                 autoFocus
+                className="text-center font-mono tracking-widest text-lg h-12 bg-slate-50 border-slate-200 focus:bg-white"
               />
-              {pinError && <p className="text-xs text-rose-400 font-medium">{pinError}</p>}
+              {pinError && <p className="text-xs text-rose-600 font-medium">{pinError}</p>}
             </div>
 
             <Button
               type="submit"
               disabled={verifyingPin}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold h-11"
+              className="w-full h-11 bg-slate-900 hover:bg-black text-white text-xs font-semibold uppercase tracking-wider gap-2"
             >
-              {verifyingPin ? 'Verifying Authorization...' : 'Unlock Exam Remote'}
+              <KeyRound className="w-4 h-4" />
+              <span>{verifyingPin ? 'Verifying PIN...' : 'Unlock Remote'}</span>
             </Button>
           </form>
 
-          <div className="pt-2 text-center">
-            <p className="text-[11px] text-slate-500">
-              Default operator PIN is <span className="font-mono text-slate-400 font-bold">12345678</span>.
-            </p>
+          <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-400">
+            PIN configured by super admin in examination settings. Default PIN is <span className="font-mono font-bold text-slate-600">12345678</span>.
           </div>
         </div>
       </div>
@@ -400,503 +582,897 @@ function ExamRemoteContent() {
   }
 
   const exam = remoteData?.exam || {};
-  const summary = remoteData?.summary || {
-    totalRegistered: 0,
-    totalWriting: 0,
-    totalSubmitted: 0,
-    totalQualified: 0,
-    totalFailed: 0,
-  };
-  const rounds = remoteData?.rounds || [];
-  const candidates = remoteData?.candidates || [];
-
-  // Filter candidates based on activeTab, filter, and search
-  const filteredCandidates = candidates.filter((c: any) => {
-    if (activeTab !== 'all') {
-      const rNum = parseInt(activeTab, 10);
-      if (c.roundNumber !== rNum) return false;
-    }
-
-    if (candidateFilter === 'writing' && c.attemptStatus !== 'in_progress') return false;
-    if (candidateFilter === 'qualified' && c.isQualified !== true) return false;
-    if (candidateFilter === 'failed' && c.isQualified !== false) return false;
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchName = c.studentName?.toLowerCase().includes(q);
-      const matchRoll = c.rollNumber?.toLowerCase().includes(q);
-      const matchLogin = c.loginId?.toLowerCase().includes(q);
-      if (!matchName && !matchRoll && !matchLogin) return false;
-    }
-
-    return true;
-  });
-
   const isAdmissionLocked = Boolean(exam.admission_locked);
   const examStatus = exam.status || 'live';
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans pb-16 selection:bg-indigo-500 selection:text-white">
-      {/* Top Remote Header Bar */}
-      <header className="sticky top-0 z-30 bg-slate-900/90 border-b border-slate-800 backdrop-blur-md px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
-          <div>
-            <h1 className="text-sm font-bold text-white tracking-tight leading-none flex items-center gap-1.5">
-              <span>{exam.name || 'Mentneo Exam'}</span>
-              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-900/60 text-indigo-300 border border-indigo-700">
-                Remote
-              </span>
-            </h1>
-            <p className="text-[10px] text-slate-400 font-mono mt-0.5">/{exam.slug || examSlugOrId}</p>
+    <div className="min-h-screen bg-slate-50 text-slate-900 pb-28">
+      {/* Top Professional App Header */}
+      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-3">
+        <div className="max-w-md mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <div
+                className={`w-3 h-3 rounded-full ${
+                  examStatus === 'live'
+                    ? 'bg-emerald-500 animate-pulse'
+                    : examStatus === 'paused'
+                    ? 'bg-amber-500'
+                    : 'bg-slate-400'
+                }`}
+              />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-sm font-bold text-slate-900 tracking-tight leading-none truncate max-w-[190px]">
+                  {exam.name || 'Mentneo Exam'}
+                </h1>
+                <Badge
+                  variant={
+                    examStatus === 'live'
+                      ? 'success'
+                      : examStatus === 'paused'
+                      ? 'warning'
+                      : 'neutral'
+                  }
+                  className="text-[9px] uppercase px-1.5 py-0 font-bold"
+                >
+                  {examStatus}
+                </Badge>
+              </div>
+              <p className="text-[10px] text-slate-400 font-mono mt-0.5">/{exam.slug || examSlugOrId}</p>
+            </div>
           </div>
-        </div>
 
-        <div className="flex items-center gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => fetchRemoteData(false)}
-            disabled={refreshing}
-            className="h-8 w-8 p-0 bg-slate-800 border-slate-700 text-slate-300 hover:text-white"
-            title="Refresh Live Data"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => fetchRemoteData()}
+              disabled={refreshing}
+              className="h-8 w-8 p-0 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg"
+              title="Refresh Telemetry"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCopyRemoteLink}
-            className="h-8 px-2.5 bg-slate-800 border-slate-700 text-slate-300 hover:text-white text-xs gap-1"
-          >
-            <Copy className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Share</span>
-          </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCopyLink}
+              className="h-8 w-8 p-0 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg"
+              title="Copy Remote URL"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPinModalOpen(true)}
-            className="h-8 px-2.5 bg-slate-800 border-slate-700 text-slate-300 hover:text-white text-xs gap-1 font-mono"
-          >
-            <KeyRound className="w-3 h-3 text-amber-400" />
-            <span className="hidden sm:inline">PIN</span>
-          </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleLockRemote}
+              className="h-8 w-8 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg"
+              title="Lock Remote"
+            >
+              <Lock className="w-3.5 h-3.5" />
+            </Button>
+          </div>
         </div>
       </header>
 
-      {/* Emergency Announcement Banner (if active) */}
-      {exam.emergency_announcement && (
-        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2.5 flex items-center justify-between text-amber-300 text-xs">
-          <div className="flex items-center gap-2">
-            <Megaphone className="w-4 h-4 text-amber-400 animate-bounce shrink-0" />
-            <span className="font-semibold">{exam.emergency_announcement}</span>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setAnnouncementText('');
-              handleBroadcastAnnouncement();
-            }}
-            className="h-6 text-[10px] text-amber-400 hover:bg-amber-500/20 px-2"
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
-
-      {/* Main Remote Body */}
-      <main className="flex-1 w-full max-w-3xl mx-auto px-4 py-4 space-y-4">
-        {/* ========================================================= */}
-        {/* SECTION 1: MASTER HARDWARE-STYLE REMOTE SWITCHES           */}
-        {/* ========================================================= */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {/* Switch 1: Student Admission Gate */}
-          <div
-            onClick={handleToggleAdmission}
-            className={`p-4 rounded-xl border cursor-pointer transition-all active:scale-[0.98] select-none ${
-              isAdmissionLocked
-                ? 'bg-rose-950/40 border-rose-800/80 hover:bg-rose-900/30'
-                : 'bg-emerald-950/40 border-emerald-800/80 hover:bg-emerald-900/30'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                Candidate Admission Gate
-              </span>
-              <span
-                className={`w-3 h-3 rounded-full ${
-                  isAdmissionLocked ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500 animate-pulse'
-                }`}
-              />
-            </div>
-            <div className="mt-2 flex items-center justify-between">
+      {/* Main Content Area (Max Width for authentic mobile feel) */}
+      <main className="max-w-md mx-auto px-4 pt-4 space-y-4">
+        {/* Active Emergency Broadcast Notification Banner (if any) */}
+        {exam.emergency_announcement && (
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start justify-between gap-3 shadow-2xs">
+            <div className="flex items-start gap-2">
+              <Megaphone className="w-4 h-4 text-amber-600 shrink-0 mt-0.5 animate-bounce" />
               <div>
-                <h3 className="text-lg font-black text-white tracking-tight flex items-center gap-1.5">
-                  {isAdmissionLocked ? <Lock className="w-4 h-4 text-rose-400" /> : <Unlock className="w-4 h-4 text-emerald-400" />}
-                  <span>{isAdmissionLocked ? 'LOCKED / CLOSED' : 'OPEN / ACCEPTING'}</span>
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  {isAdmissionLocked ? 'No new candidates can sign in' : 'Candidates can register & verify'}
-                </p>
-              </div>
-              <div
-                className={`px-3 py-1 rounded-full text-xs font-bold border font-mono ${
-                  isAdmissionLocked
-                    ? 'bg-rose-600 text-white border-rose-500'
-                    : 'bg-emerald-600 text-white border-emerald-500'
-                }`}
-              >
-                {togglingAdmission ? 'Updating...' : 'TAP TO TOGGLE'}
+                <p className="font-bold text-[11px] uppercase tracking-wider text-amber-800">Live Broadcast to Candidates</p>
+                <p className="text-xs text-amber-950 mt-0.5 leading-relaxed">{exam.emergency_announcement}</p>
               </div>
             </div>
-          </div>
-
-          {/* Switch 2: Broadcast Alert to Candidate Screens */}
-          <div
-            onClick={() => {
-              setAnnouncementText(exam.emergency_announcement || '');
-              setBroadcastModalOpen(true);
-            }}
-            className="p-4 rounded-xl border border-slate-800 bg-slate-900/70 hover:bg-slate-900 cursor-pointer transition-all active:scale-[0.98]"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                Proctor Public Announcement
-              </span>
-              <Megaphone className="w-4 h-4 text-indigo-400" />
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-black text-white tracking-tight">
-                  {exam.emergency_announcement ? 'ALERT ACTIVE' : 'BROADCAST ALERT'}
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                  {exam.emergency_announcement || 'Push announcement to all student screens'}
-                </p>
-              </div>
-              <div className="px-3 py-1 rounded-full text-xs font-bold border font-mono bg-indigo-600 text-white border-indigo-500">
-                COMPOSE
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* ========================================================= */}
-        {/* SECTION 2: EXAM STATUS STATE BUTTONS                      */}
-        {/* ========================================================= */}
-        <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3.5 space-y-2">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold uppercase tracking-wider text-[10px]">Examination Operational Status</span>
-            <span className="font-mono text-slate-300">Current: <strong className="text-white uppercase">{examStatus}</strong></span>
-          </div>
-
-          <div className="grid grid-cols-4 gap-2">
-            {[
-              { id: 'live', label: 'LIVE', icon: Play, color: 'hover:bg-emerald-600 border-emerald-700 text-emerald-400', active: 'bg-emerald-600 text-white' },
-              { id: 'paused', label: 'PAUSE', icon: Pause, color: 'hover:bg-amber-600 border-amber-700 text-amber-400', active: 'bg-amber-600 text-white' },
-              { id: 'completed', label: 'STOP', icon: StopCircle, color: 'hover:bg-rose-600 border-rose-700 text-rose-400', active: 'bg-rose-600 text-white' },
-              { id: 'draft', label: 'DRAFT', icon: Lock, color: 'hover:bg-slate-700 border-slate-700 text-slate-400', active: 'bg-slate-700 text-white' },
-            ].map((btn) => {
-              const Icon = btn.icon;
-              const isActive = examStatus === btn.id;
-              return (
-                <button
-                  key={btn.id}
-                  onClick={() => handleSetStatus(btn.id)}
-                  disabled={updatingStatus}
-                  className={`h-11 rounded-lg border font-bold text-xs flex flex-col items-center justify-center gap-0.5 transition-all active:scale-95 ${
-                    isActive ? btn.active + ' shadow-md' : 'bg-slate-950/60 ' + btn.color
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{btn.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ========================================================= */}
-        {/* SECTION 3: LIVE TELEMETRY METRIC TILES                    */}
-        {/* ========================================================= */}
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 text-center">
-          <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-xl">
-            <span className="text-[10px] text-slate-400 block font-semibold uppercase">Registered</span>
-            <span className="text-xl font-black text-white font-mono">{summary.totalRegistered}</span>
-          </div>
-
-          <div className="bg-amber-950/30 border border-amber-800/40 p-2.5 rounded-xl">
-            <span className="text-[10px] text-amber-400 block font-semibold uppercase flex items-center justify-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              Writing
-            </span>
-            <span className="text-xl font-black text-amber-300 font-mono">{summary.totalWriting}</span>
-          </div>
-
-          <div className="bg-slate-900/60 border border-slate-800 p-2.5 rounded-xl">
-            <span className="text-[10px] text-slate-400 block font-semibold uppercase">Submitted</span>
-            <span className="text-xl font-black text-slate-200 font-mono">{summary.totalSubmitted}</span>
-          </div>
-
-          <div className="bg-emerald-950/30 border border-emerald-800/40 p-2.5 rounded-xl">
-            <span className="text-[10px] text-emerald-400 block font-semibold uppercase">Qualified</span>
-            <span className="text-xl font-black text-emerald-300 font-mono">{summary.totalQualified}</span>
-          </div>
-
-          <div className="bg-rose-950/30 border border-rose-800/40 p-2.5 rounded-xl col-span-3 sm:col-span-1">
-            <span className="text-[10px] text-rose-400 block font-semibold uppercase">Failed</span>
-            <span className="text-xl font-black text-rose-300 font-mono">{summary.totalFailed}</span>
-          </div>
-        </div>
-
-        {/* ========================================================= */}
-        {/* SECTION 4: CANDIDATE INSPECTOR & CONTROLS                  */}
-        {/* ========================================================= */}
-        <div className="space-y-3 pt-2">
-          {/* Round Navigation Tabs */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-slate-800 scrollbar-none">
             <button
-              onClick={() => setActiveTab('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ${
-                activeTab === 'all'
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-slate-900 text-slate-400 hover:text-slate-200'
-              }`}
+              onClick={requestClearAnnouncement}
+              className="text-[10px] uppercase font-bold text-amber-700 hover:text-rose-700 underline shrink-0 cursor-pointer"
             >
-              All Rounds ({candidates.length})
+              Clear
             </button>
-            {rounds.map((rnd: any) => (
-              <button
-                key={`tab-round-${rnd.id}`}
-                onClick={() => setActiveTab(String(rnd.round_number))}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
-                  activeTab === String(rnd.round_number)
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+          </div>
+        )}
+
+        {/* ----------------- TAB 1: LIVE MONITOR ----------------- */}
+        {activeNav === 'live' && (
+          <div className="space-y-4">
+            {/* Operational Status Card */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
+                  Examination Status
+                </span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-base font-bold text-slate-900 uppercase">{examStatus}</span>
+                  <span className="text-xs text-slate-400">&bull;</span>
+                  <span
+                    className={`text-xs font-semibold ${
+                      isAdmissionLocked ? 'text-rose-600' : 'text-emerald-600'
+                    }`}
+                  >
+                    {isAdmissionLocked ? 'Admissions Closed' : 'Admissions Open'}
+                  </span>
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setActiveNav('settings')}
+                className="text-xs font-semibold gap-1.5 border-slate-200 hover:bg-slate-50 h-8"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                <span>Change</span>
+              </Button>
+            </div>
+
+            {/* Telemetry Metric Tiles (2x2 Grid) */}
+            <div className="grid grid-cols-2 gap-3">
+              {/* Registered */}
+              <div
+                onClick={() => {
+                  setStudentFilter('all');
+                  setActiveNav('students');
+                }}
+                className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs cursor-pointer hover:border-slate-300 transition-colors"
+              >
+                <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+                  <span className="font-semibold uppercase text-[10px] tracking-wider">Registered</span>
+                  <Users className="w-4 h-4 text-slate-400" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 tracking-tight">
+                  {allCandidates.length}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Total roster candidates</p>
+              </div>
+
+              {/* In Exam / Writing */}
+              <div
+                onClick={() => {
+                  setStudentFilter('writing');
+                  setActiveNav('students');
+                }}
+                className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs cursor-pointer hover:border-amber-300 transition-colors bg-gradient-to-br from-amber-50/40 to-white"
+              >
+                <div className="flex items-center justify-between text-amber-700 text-xs mb-1">
+                  <span className="font-semibold uppercase text-[10px] tracking-wider">Writing Now</span>
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                </div>
+                <div className="text-2xl font-bold text-amber-900 tracking-tight">
+                  {writingCount}
+                </div>
+                <p className="text-[10px] text-amber-700 mt-1">Active test takers</p>
+              </div>
+
+              {/* Submitted */}
+              <div
+                onClick={() => {
+                  setStudentFilter('submitted');
+                  setActiveNav('students');
+                }}
+                className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs cursor-pointer hover:border-slate-300 transition-colors"
+              >
+                <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+                  <span className="font-semibold uppercase text-[10px] tracking-wider">Submitted</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 tracking-tight">
+                  {submittedCount}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Finalized submissions</p>
+              </div>
+
+              {/* Qualified */}
+              <div
+                onClick={() => {
+                  setStudentFilter('qualified');
+                  setActiveNav('students');
+                }}
+                className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs cursor-pointer hover:border-slate-300 transition-colors"
+              >
+                <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
+                  <span className="font-semibold uppercase text-[10px] tracking-wider">Qualified</span>
+                  <Award className="w-4 h-4 text-indigo-600" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900 tracking-tight">
+                  {qualifiedCount}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Passed pass mark</p>
+              </div>
+            </div>
+
+            {/* Candidate Admission Quick Access Banner */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    isAdmissionLocked
+                      ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                      : 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                  }`}
+                >
+                  {isAdmissionLocked ? <Lock className="w-5 h-5" /> : <Unlock className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900">
+                    {isAdmissionLocked ? 'Admissions Closed' : 'Admissions Open'}
+                  </h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {isAdmissionLocked
+                      ? 'No new candidates can register or log in.'
+                      : 'Any candidate with link can enter.'}
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                variant={isAdmissionLocked ? 'outline' : 'primary'}
+                size="sm"
+                onClick={requestToggleAdmission}
+                className={`text-xs font-semibold h-8 uppercase tracking-wider ${
+                  isAdmissionLocked
+                    ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                    : 'bg-rose-600 hover:bg-rose-700 text-white'
                 }`}
               >
-                <span>R{rnd.round_number}: {rnd.name}</span>
-                <span className="text-[10px] font-mono opacity-70">({candidates.filter((c: any) => c.roundNumber === rnd.round_number).length})</span>
-              </button>
-            ))}
-          </div>
+                {isAdmissionLocked ? 'Reopen' : 'Stop'}
+              </Button>
+            </div>
 
-          {/* Search & Sub-Filter Bar */}
-          <div className="flex flex-col sm:flex-row gap-2">
-            <div className="relative flex-1">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
-              <Input
-                placeholder="Search by student name or roll number..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-slate-900 border-slate-800 pl-9 text-xs h-9 text-white"
+            {/* Configured Examination Rounds */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  Examination Rounds ({remoteData?.rounds?.length || 0})
+                </span>
+                <span className="text-[10px] text-slate-400">Sequential</span>
+              </div>
+
+              <div className="space-y-2">
+                {(remoteData?.rounds || []).map((round: any, i: number) => (
+                  <div
+                    key={`round-${round.id || i}`}
+                    className="p-3 rounded-xl border border-slate-100 bg-slate-50 flex items-center justify-between text-xs"
+                  >
+                    <div>
+                      <p className="font-bold text-slate-900">
+                        R{round.round_number || i + 1}: {round.name}
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        {round.duration_minutes}m &bull; {round.total_questions || 30} Qs &bull; Pass:{' '}
+                        {round.qualifying_marks}m
+                      </p>
+                    </div>
+                    <Badge variant="neutral" className="text-[10px] uppercase font-mono">
+                      {round.round_type || 'mcq'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ----------------- TAB 2: CANDIDATE ROSTER ----------------- */}
+        {activeNav === 'students' && (
+          <div className="space-y-3">
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+              <input
+                type="text"
+                placeholder="Search candidates by name or roll number..."
+                value={studentSearch}
+                onChange={(e) => setStudentSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-white rounded-xl border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:border-slate-900 shadow-2xs"
               />
             </div>
 
-            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-xs">
-              {[
-                { id: 'all', label: 'All' },
-                { id: 'writing', label: 'Writing' },
-                { id: 'qualified', label: 'Passed' },
-                { id: 'failed', label: 'Failed' },
-              ].map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => setCandidateFilter(f.id)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
-                    candidateFilter === f.id
-                      ? 'bg-slate-800 text-white'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
+            {/* Filter Chips */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+              <button
+                onClick={() => setStudentFilter('all')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                  studentFilter === 'all'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                All ({allCandidates.length})
+              </button>
+              <button
+                onClick={() => setStudentFilter('writing')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                  studentFilter === 'writing'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Writing ({writingCount})
+              </button>
+              <button
+                onClick={() => setStudentFilter('registered')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                  studentFilter === 'registered'
+                    ? 'bg-slate-700 text-white'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Not Started ({registeredCount})
+              </button>
+              <button
+                onClick={() => setStudentFilter('submitted')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                  studentFilter === 'submitted'
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Submitted ({submittedCount})
+              </button>
+              <button
+                onClick={() => setStudentFilter('qualified')}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                  studentFilter === 'qualified'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Qualified ({qualifiedCount})
+              </button>
             </div>
-          </div>
 
-          {/* Candidate Card Stream */}
-          <div className="space-y-2">
-            {filteredCandidates.length === 0 ? (
-              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-8 text-center text-slate-500 text-xs">
-                No candidates matching the selected filters.
-              </div>
-            ) : (
-              filteredCandidates.map((c: any, index: number) => {
-                const isWriting = c.attemptStatus === 'in_progress';
-                const isPassed = c.isQualified === true;
-                const isFailed = c.isQualified === false;
-                const isRegisteredOnly = c.attemptStatus === 'registered';
+            {/* Candidate Cards List */}
+            <div className="space-y-2.5">
+              {filteredCandidates.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-400 space-y-1">
+                  <Users className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                  <p className="font-semibold text-slate-700 text-xs">No candidates match this filter</p>
+                  <p className="text-[11px] text-slate-400">Try clearing the search or changing status tab.</p>
+                </div>
+              ) : (
+                filteredCandidates.map((c: any) => {
+                  const isWriting = c.attemptStatus === 'in_progress';
+                  const isRegisteredOnly = c.attemptStatus === 'registered';
+                  const isDone = c.attemptStatus === 'submitted' || c.attemptStatus === 'timed_out';
 
-                return (
-                  <div
-                    key={`remote-cand-${c.attemptId || index}`}
-                    className="p-3.5 rounded-xl border border-slate-800/90 bg-slate-900/80 hover:bg-slate-900 transition-colors space-y-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-bold text-sm text-white tracking-tight">{c.studentName}</h4>
-                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
+                  return (
+                    <div
+                      key={`candidate-card-${c.registrationId || c.attemptId}`}
+                      className="bg-white rounded-2xl border border-slate-200 p-3.5 shadow-2xs space-y-2.5 hover:border-slate-300 transition-colors"
+                    >
+                      {/* Candidate Header */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="text-xs font-bold text-slate-900 leading-tight">
+                            {c.studentName || 'Candidate'}
+                          </h4>
+                          <span className="font-mono text-[11px] text-slate-500 block mt-0.5">
                             {c.rollNumber || c.loginId}
                           </span>
-                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
-                            R{c.roundNumber} ({c.roundType})
-                          </span>
+                        </div>
+
+                        <div>
+                          {isWriting ? (
+                            <Badge variant="warning" className="text-[10px] gap-1 font-semibold">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+                              <span>Writing</span>
+                            </Badge>
+                          ) : isDone ? (
+                            <Badge variant="success" className="text-[10px] font-semibold">
+                              Submitted
+                            </Badge>
+                          ) : (
+                            <Badge variant="neutral" className="text-[10px] font-semibold">
+                              Not Started
+                            </Badge>
+                          )}
                         </div>
                       </div>
 
-                      {/* Status Badge */}
-                      <div>
-                        {isWriting ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/60 text-amber-300 border border-amber-800 animate-pulse font-mono">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                            Writing • {formatTimeRemaining(c.secondsRemaining)}
-                          </span>
-                        ) : isRegisteredOnly ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
-                            Not Started
-                          </span>
-                        ) : isPassed ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/60 text-emerald-300 border border-emerald-800">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                            Qualified
-                          </span>
-                        ) : isFailed ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-950/60 text-rose-300 border border-rose-800">
-                            <XCircle className="w-3 h-3 text-rose-400" />
-                            Not Qualified
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-400">
-                            {c.attemptStatus}
-                          </span>
+                      {/* Candidate Meta Info */}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+                        <div>
+                          Round: <strong className="text-slate-800">R{c.roundNumber || 1}</strong>
+                        </div>
+                        {isWriting && c.secondsRemaining > 0 && (
+                          <div className="flex items-center gap-1 font-mono text-amber-700 font-semibold">
+                            <Clock className="w-3 h-3" />
+                            <span>{formatTimeRemaining(c.secondsRemaining)}</span>
+                          </div>
                         )}
-                      </div>
-                    </div>
-
-                    {/* Stats bar & Quick proctor action buttons */}
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-xs">
-                      <div className="flex items-center gap-3 font-mono text-slate-400 text-[11px]">
-                        <span>
-                          Score: <strong className="text-white">{c.score !== null ? `${c.score}/${c.totalMarks}` : '—'}</strong>
-                        </span>
+                        {isDone && c.score !== undefined && (
+                          <div>
+                            Score: <strong className="text-slate-900 font-mono">{c.score}</strong> / {c.totalMarks || 30}
+                          </div>
+                        )}
                         {c.cheatingWarnings > 0 && (
-                          <span className="text-rose-400 font-bold">
-                            Warnings: {c.cheatingWarnings}
-                          </span>
+                          <Badge variant="danger" className="text-[9px] px-1.5 py-0">
+                            {c.cheatingWarnings} Warnings
+                          </Badge>
                         )}
                       </div>
 
-                      {/* Proctor Action Triggers */}
-                      <div className="flex items-center gap-1.5">
-                        {isWriting && (
-                          <>
-                            <button
-                              onClick={() => handleExtendTime(c.attemptId)}
-                              className="px-2 py-1 rounded-md text-[10px] font-bold bg-amber-600 hover:bg-amber-500 text-white transition-all"
-                              title="Add +5 minutes to this candidate"
-                            >
-                              +5 Mins
-                            </button>
-                            <button
-                              onClick={() => handleForceSubmit(c.attemptId)}
-                              className="px-2 py-1 rounded-md text-[10px] font-bold bg-slate-800 hover:bg-rose-600 text-slate-300 hover:text-white border border-slate-700 transition-all"
-                              title="Force submit candidate attempt"
-                            >
-                              Submit
-                            </button>
-                          </>
-                        )}
-                      </div>
+                      {/* Quick Invigilator Actions (Double Confirmation) */}
+                      {isWriting && (
+                        <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => requestExtendTime(c)}
+                            className="flex-1 text-[11px] h-7 font-semibold border-slate-200 hover:bg-slate-50"
+                          >
+                            +5 Min Time
+                          </Button>
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => requestForceSubmit(c)}
+                            className="flex-1 text-[11px] h-7 font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                          >
+                            Force Submit
+                          </Button>
+                        </div>
+                      )}
                     </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ----------------- TAB 3: PROCTOR ANNOUNCEMENT ----------------- */}
+        {activeNav === 'announce' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+              <div className="flex items-center gap-2 text-slate-900">
+                <Megaphone className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-xs font-bold uppercase tracking-wider">
+                  Proctor Public Announcement
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500">
+                Broadcast an emergency notice or directive to all students writing this exam. It pops up instantly on their screens.
+              </p>
+
+              <div className="space-y-2">
+                <textarea
+                  rows={3}
+                  value={announcementText}
+                  onChange={(e) => setAnnouncementText(e.target.value)}
+                  placeholder="Type an announcement to broadcast to all candidate screens..."
+                  className="w-full p-3 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-hidden focus:border-slate-900 bg-slate-50/50 resize-none leading-relaxed"
+                />
+
+                {/* Quick Announcement Presets */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Quick Presets</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      '10 minutes remaining! Please review your answers.',
+                      'Do not switch browser tabs. Focus is being monitored.',
+                      'Maintain complete silence. Proctors are observing.',
+                    ].map((preset, idx) => (
+                      <button
+                        key={`preset-${idx}`}
+                        type="button"
+                        onClick={() => setAnnouncementText(preset)}
+                        className="text-[10px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 font-medium text-left transition-colors cursor-pointer"
+                      >
+                        {preset}
+                      </button>
+                    ))}
                   </div>
-                );
-              })
+                </div>
+
+                <Button
+                  onClick={requestBroadcastAnnouncement}
+                  disabled={sendingAnnouncement || !announcementText.trim()}
+                  className="w-full h-10 bg-slate-900 hover:bg-black text-white text-xs font-semibold uppercase tracking-wider gap-2 mt-2"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Broadcast to All Screens</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* Current Active Announcement (if any) */}
+            {exam.emergency_announcement && (
+              <div className="bg-white rounded-2xl border border-amber-200 p-4 shadow-xs space-y-2 bg-amber-50/30">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">
+                    Currently Active Banner
+                  </span>
+                  <Badge variant="warning" className="text-[9px]">Active On Screens</Badge>
+                </div>
+                <p className="text-xs text-slate-800 font-medium leading-relaxed bg-white p-3 rounded-xl border border-amber-200">
+                  {exam.emergency_announcement}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={requestClearAnnouncement}
+                  className="w-full text-xs font-semibold text-rose-600 border-rose-200 hover:bg-rose-50 h-8"
+                >
+                  Clear Active Banner
+                </Button>
+              </div>
             )}
           </div>
-        </div>
+        )}
+
+        {/* ----------------- TAB 4: SETTINGS & CONTROLS ----------------- */}
+        {activeNav === 'settings' && (
+          <div className="space-y-4">
+            {/* Operational Status Controller with Double Confirmation */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                  Examination Status Control
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Changing status requires double confirmation to prevent accidental interruption.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => requestSetStatus('live')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    examStatus === 'live'
+                      ? 'border-emerald-500 bg-emerald-50/60 ring-2 ring-emerald-500/20'
+                      : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900">LIVE</span>
+                    <Play className="w-3.5 h-3.5 text-emerald-600" />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Active exam session</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => requestSetStatus('paused')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    examStatus === 'paused'
+                      ? 'border-amber-500 bg-amber-50/60 ring-2 ring-amber-500/20'
+                      : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900">PAUSE</span>
+                    <Pause className="w-3.5 h-3.5 text-amber-600" />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Hold all progress</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => requestSetStatus('completed')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    examStatus === 'completed'
+                      ? 'border-rose-500 bg-rose-50/60 ring-2 ring-rose-500/20'
+                      : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-700">STOP</span>
+                    <StopCircle className="w-3.5 h-3.5 text-rose-600" />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Conclude exam</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => requestSetStatus('draft')}
+                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                    examStatus === 'draft'
+                      ? 'border-slate-500 bg-slate-100 ring-2 ring-slate-400/20'
+                      : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900">DRAFT</span>
+                    <FileEdit className="w-3.5 h-3.5 text-slate-600" />
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">Set back to draft</p>
+                </button>
+              </div>
+            </div>
+
+            {/* Candidate Admission Gate (Stop Admissions) with Double Confirmation */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Candidate Admission Gate
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Stop new candidate registrations and entry without stopping the ongoing exam.
+                  </p>
+                </div>
+                <Badge variant={isAdmissionLocked ? 'danger' : 'success'}>
+                  {isAdmissionLocked ? 'Closed' : 'Open'}
+                </Badge>
+              </div>
+
+              <Button
+                variant={isAdmissionLocked ? 'outline' : 'primary'}
+                onClick={requestToggleAdmission}
+                className={`w-full h-10 text-xs font-semibold uppercase tracking-wider gap-2 ${
+                  isAdmissionLocked
+                    ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                    : 'bg-rose-600 hover:bg-rose-700 text-white'
+                }`}
+              >
+                {isAdmissionLocked ? <Unlock className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                <span>{isAdmissionLocked ? 'Reopen Candidate Admissions' : 'Stop Candidate Admissions'}</span>
+              </Button>
+            </div>
+
+            {/* Remote PIN Management */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                    Invigilator Remote PIN
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Security PIN required to access this remote control console.
+                  </p>
+                </div>
+                <KeyRound className="w-4 h-4 text-slate-400" />
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] uppercase text-slate-400 font-semibold block">Current PIN</span>
+                  <span className="font-mono font-bold text-sm text-slate-900">
+                    {showCurrentPin ? exam.remote_pin || pin : '••••••••'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowCurrentPin(!showCurrentPin)}
+                    className="h-8 w-8 p-0 text-slate-500"
+                  >
+                    {showCurrentPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setNewPinInput(exam.remote_pin || pin || '12345678');
+                      setPinModalOpen(true);
+                    }}
+                    className="text-xs font-semibold h-8"
+                  >
+                    Edit PIN
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* External Quick Links */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                Administrative Shortcuts
+              </span>
+
+              <a
+                href={`/exam/admin/examinations/${exam.id}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-100 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors"
+              >
+                <span>Full Examination Admin Console</span>
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+              </a>
+
+              <a
+                href={`/exam/admin/examinations/${exam.id}/students`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-100 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors"
+              >
+                <span>Candidate Roster & Credentials</span>
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+              </a>
+
+              <a
+                href={`/exam/admin/examinations/${exam.id}/results`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-100 hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors"
+              >
+                <span>Official Results Dossier</span>
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+              </a>
+            </div>
+          </div>
+        )}
       </main>
 
-      {/* Broadcast Modal */}
-      {broadcastModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 w-full max-w-sm space-y-4">
-            <h3 className="font-bold text-white text-base flex items-center gap-2">
-              <Megaphone className="w-5 h-5 text-indigo-400" />
-              <span>Broadcast Announcement</span>
-            </h3>
-            <p className="text-xs text-slate-400">
-              This message will flash prominently across all active candidate screens immediately.
-            </p>
-            <Input
-              placeholder="e.g. Please remain seated. 10 minutes left."
-              value={announcementText}
-              onChange={(e) => setAnnouncementText(e.target.value)}
-              className="bg-slate-950 border-slate-700 text-white text-xs h-10"
-              autoFocus
-            />
-            <div className="flex items-center gap-2 pt-2">
+      {/* ----------------- LOWER APP MENU (FIXED BOTTOM NAVIGATION) ----------------- */}
+      <nav className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-lg pb-safe">
+        <div className="max-w-md mx-auto grid grid-cols-4 h-16">
+          <button
+            type="button"
+            onClick={() => setActiveNav('live')}
+            className={`flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+              activeNav === 'live' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600 font-medium'
+            }`}
+          >
+            <Radio className={`w-5 h-5 ${activeNav === 'live' ? 'text-slate-900 stroke-[2.5]' : ''}`} />
+            <span className="text-[10px] tracking-tight">Live</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveNav('students')}
+            className={`flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+              activeNav === 'students' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600 font-medium'
+            }`}
+          >
+            <Users className={`w-5 h-5 ${activeNav === 'students' ? 'text-slate-900 stroke-[2.5]' : ''}`} />
+            <span className="text-[10px] tracking-tight">Students</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveNav('announce')}
+            className={`flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+              activeNav === 'announce' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600 font-medium'
+            }`}
+          >
+            <Megaphone className={`w-5 h-5 ${activeNav === 'announce' ? 'text-slate-900 stroke-[2.5]' : ''}`} />
+            <span className="text-[10px] tracking-tight">Announce</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveNav('settings')}
+            className={`flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+              activeNav === 'settings' ? 'text-slate-900 font-bold' : 'text-slate-400 hover:text-slate-600 font-medium'
+            }`}
+          >
+            <Settings2 className={`w-5 h-5 ${activeNav === 'settings' ? 'text-slate-900 stroke-[2.5]' : ''}`} />
+            <span className="text-[10px] tracking-tight">Settings</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* ----------------- DOUBLE CONFIRMATION MODAL ----------------- */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 border border-slate-200 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  confirmModal.confirmVariant === 'danger'
+                    ? 'bg-rose-50 text-rose-600'
+                    : confirmModal.confirmVariant === 'warning'
+                    ? 'bg-amber-50 text-amber-600'
+                    : 'bg-indigo-50 text-indigo-600'
+                }`}
+              >
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 leading-snug">{confirmModal.title}</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{confirmModal.description}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setBroadcastModalOpen(false)}
-                className="flex-1 bg-slate-800 border-slate-700 text-slate-300"
+                onClick={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+                disabled={confirmExecuting}
+                className="flex-1 text-xs font-semibold h-9"
               >
                 Cancel
               </Button>
+
               <Button
                 size="sm"
-                onClick={handleBroadcastAnnouncement}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold"
+                onClick={handleExecuteConfirmedAction}
+                disabled={confirmExecuting}
+                className={`flex-1 text-xs font-semibold h-9 text-white ${
+                  confirmModal.confirmVariant === 'danger'
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : confirmModal.confirmVariant === 'warning'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-slate-900 hover:bg-black'
+                }`}
               >
-                Broadcast
+                {confirmExecuting ? 'Processing...' : confirmModal.confirmText}
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Change PIN Modal */}
+      {/* ----------------- EDIT REMOTE PIN MODAL ----------------- */}
       {pinModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 w-full max-w-sm space-y-4">
-            <h3 className="font-bold text-white text-base flex items-center gap-2">
-              <KeyRound className="w-5 h-5 text-amber-400" />
-              <span>Change Remote PIN</span>
-            </h3>
-            <p className="text-xs text-slate-400">
-              Set a new 4 to 12 digit operator PIN for accessing this exam remote control.
-            </p>
-            <Input
-              type="password"
-              inputMode="numeric"
-              placeholder="Enter new PIN"
-              value={newPinInput}
-              onChange={(e) => setNewPinInput(e.target.value)}
-              className="bg-slate-950 border-slate-700 text-white font-mono text-center text-base h-11"
-              autoFocus
-            />
-            <div className="flex items-center gap-2 pt-2">
-              <Button
-                variant="outline"
-                size="sm"
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 border border-slate-200 shadow-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-slate-700" />
+                <h3 className="text-sm font-bold text-slate-900">Change Remote PIN</h3>
+              </div>
+              <button
                 onClick={() => setPinModalOpen(false)}
-                className="flex-1 bg-slate-800 border-slate-700 text-slate-300"
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
               >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleUpdatePin}
-                className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold"
-              >
-                Save PIN
-              </Button>
+                <X className="w-4 h-4" />
+              </button>
             </div>
+
+            <form onSubmit={handleSavePin} className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider">
+                  New 4-12 Digit PIN
+                </label>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={12}
+                  placeholder="Enter new PIN"
+                  value={newPinInput}
+                  onChange={(e) => setNewPinInput(e.target.value)}
+                  className="font-mono text-center tracking-widest text-lg h-11"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  onClick={generateRandomPin}
+                  className="text-xs text-indigo-600 font-semibold hover:underline cursor-pointer"
+                >
+                  Generate Random 6-Digit PIN
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPinModalOpen(false)}
+                  className="flex-1 text-xs font-semibold h-9"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={savingPin || !newPinInput.trim()}
+                  className="flex-1 text-xs font-semibold h-9 bg-slate-900 hover:bg-black text-white"
+                >
+                  {savingPin ? 'Saving...' : 'Save PIN'}
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -906,7 +1482,15 @@ function ExamRemoteContent() {
 
 export default function ExamRemotePage() {
   return (
-    <React.Suspense fallback={<div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-xs">Loading Exam Remote Control...</div>}>
+    <React.Suspense
+      fallback={
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="text-xs font-semibold text-slate-400 animate-pulse">
+            Connecting to Examination Remote Engine...
+          </div>
+        </div>
+      }
+    >
       <ExamRemoteContent />
     </React.Suspense>
   );
