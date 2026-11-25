@@ -1123,6 +1123,105 @@ export const db = {
     return { student, registration, isNew };
   },
 
+  async syncMemoryToPg(): Promise<void> {
+    try {
+      const pool = getPgPool();
+      // Drop any email unique constraints/indexes on students
+      await pool.query(`
+        DO $$ 
+        DECLARE 
+            r RECORD;
+        BEGIN 
+            FOR r IN (
+                SELECT conname 
+                FROM pg_constraint 
+                WHERE conrelid = 'public.students'::regclass 
+                  AND contype = 'u'
+                  AND conname NOT LIKE '%pkey'
+                  AND conname NOT LIKE '%roll%'
+            ) LOOP 
+                EXECUTE 'ALTER TABLE public.students DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname) || ' CASCADE';
+            END LOOP;
+        END $$;
+        DROP INDEX IF EXISTS public.students_email_key CASCADE;
+        DROP INDEX IF EXISTS public.students_email_idx CASCADE;
+        DROP INDEX IF EXISTS public.students_email_unique CASCADE;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS examination_id TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS phone TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS branch TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS specialization TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS college TEXT;
+        ALTER TABLE public.students ADD COLUMN IF NOT EXISTS year_of_study TEXT;
+        ALTER TABLE public.registrations ADD COLUMN IF NOT EXISTS login_id TEXT;
+        ALTER TABLE public.registrations DROP CONSTRAINT IF EXISTS registrations_examination_id_fkey;
+      `).catch(() => {});
+
+      // Sync all students in memory into PostgreSQL
+      for (const st of store.students.values()) {
+        try {
+          await pool.query(`
+            INSERT INTO public.students (id, roll_number, login_id, full_name, email, phone, branch, specialization, college, year_of_study, attributes, examination_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+            ON CONFLICT (roll_number) DO UPDATE SET
+              full_name = EXCLUDED.full_name,
+              email = EXCLUDED.email,
+              phone = COALESCE(NULLIF(EXCLUDED.phone, ''), public.students.phone),
+              branch = COALESCE(NULLIF(EXCLUDED.branch, ''), public.students.branch),
+              specialization = COALESCE(NULLIF(EXCLUDED.specialization, ''), public.students.specialization),
+              college = COALESCE(NULLIF(EXCLUDED.college, ''), public.students.college),
+              year_of_study = COALESCE(NULLIF(EXCLUDED.year_of_study, ''), public.students.year_of_study),
+              updated_at = NOW()
+          `, [
+            st.id,
+            st.roll_number,
+            st.login_id || st.roll_number,
+            st.full_name,
+            st.email,
+            st.phone || null,
+            st.branch || null,
+            st.specialization || null,
+            st.college || null,
+            st.year_of_study || null,
+            JSON.stringify(st.attributes || {}),
+            st.examination_id || null,
+          ]);
+        } catch {
+          // If conflict on email with an old seed record, update email of the old record
+          await pool.query(`
+            UPDATE public.students SET email = email || '-' || roll_number WHERE email = $1 AND roll_number != $2
+          `, [st.email, st.roll_number]).catch(() => {});
+          await pool.query(`
+            INSERT INTO public.students (id, roll_number, login_id, full_name, email, phone, branch, specialization, college, year_of_study, attributes, examination_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+            ON CONFLICT (roll_number) DO UPDATE SET
+              full_name = EXCLUDED.full_name,
+              email = EXCLUDED.email,
+              updated_at = NOW()
+          `, [st.id, st.roll_number, st.login_id || st.roll_number, st.full_name, st.email, st.phone || null, st.branch || null, st.specialization || null, st.college || null, st.year_of_study || null, JSON.stringify(st.attributes || {}), st.examination_id || null]).catch(() => {});
+        }
+      }
+
+      // Sync all registrations in memory into PostgreSQL
+      for (const reg of store.registrations.values()) {
+        try {
+          const updateRes = await pool.query(`
+            UPDATE public.registrations
+            SET login_id = $1, status = $2
+            WHERE examination_id = $3 AND student_id = $4
+          `, [reg.login_id || '', reg.status, reg.examination_id, reg.student_id]);
+
+          if (updateRes.rowCount === 0) {
+            await pool.query(`
+              INSERT INTO public.registrations (id, examination_id, student_id, login_id, registered_at, status)
+              VALUES ($1, $2, $3, $4, NOW(), $5)
+              ON CONFLICT DO NOTHING
+            `, [reg.id, reg.examination_id, reg.student_id, reg.login_id || '', reg.status]);
+          }
+        } catch {}
+      }
+    } catch {}
+  },
+
   async getRegistration(regId: string): Promise<Registration | null> {
     let reg = store.registrations.get(regId);
     if (!reg) {
@@ -1209,6 +1308,9 @@ export const db = {
     if (exam?.id) idSet.add(exam.id);
     if (exam?.slug) idSet.add(exam.slug);
     const targetIds = Array.from(idSet);
+
+    // 1b. Ensure in-memory candidates are synced to PostgreSQL
+    await this.syncMemoryToPg().catch(() => {});
 
     // 2. Query PostgreSQL to ensure newly registered candidates are ALWAYS loaded
     try {

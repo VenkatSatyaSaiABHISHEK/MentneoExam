@@ -25,6 +25,10 @@ export async function GET(req: Request) {
     let totalCount = 0;
     let queryError: string | null = null;
 
+    if (tableName === 'students' || tableName === 'registrations') {
+      await db.syncMemoryToPg().catch(() => {});
+    }
+
     try {
       // 1. Fetch column metadata for this table
       const colsRes = await queryPg(`
