@@ -15,6 +15,7 @@ import {
   Cpu,
   Menu,
   X,
+  Database,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AdminPinGate } from '@/components/admin/admin-pin-gate';
@@ -58,6 +59,7 @@ export function AdminLayoutWrapper({ children }: { children: React.ReactNode }) 
     { label: 'Overview', href: '/admin', icon: LayoutDashboard, exact: true },
     { label: 'Examinations', href: '/admin/examinations', icon: FileCheck2, exact: false },
     { label: 'New Exam', href: '/admin/examinations/create', icon: PlusCircle, exact: false },
+    { label: 'Database Studio', href: '/admin/database', icon: Database, exact: false },
     { label: 'Cluster & Nodes', href: '/admin/cluster', icon: Cpu, exact: false },
     { label: 'Settings & Logs', href: '/admin/settings', icon: Settings, exact: false },
   ];
@@ -96,6 +98,7 @@ export function AdminLayoutWrapper({ children }: { children: React.ReactNode }) 
     if (pathname.includes('/students')) return ['Examinations', 'Student Roster'];
     if (pathname.includes('/rounds')) return ['Examinations', 'Dynamic Rounds'];
     if (pathname.includes('/examinations/create')) return ['Examinations', 'Create Examination'];
+    if (pathname.includes('/database')) return ['Storage Plane', 'Database Studio'];
     if (pathname.includes('/examinations/')) return ['Examinations', 'Overview'];
     if (pathname.includes('/examinations')) return ['Examinations', 'Directory'];
     if (pathname.includes('/settings')) return ['Settings & Logs'];

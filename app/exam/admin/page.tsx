@@ -15,6 +15,7 @@ import {
   Activity,
   CheckCircle2,
   FileQuestion,
+  Database,
 } from 'lucide-react';
 import { formatDuration } from '@/lib/utils';
 
@@ -36,6 +37,13 @@ async function AdminDashboardContent() {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link href="/exam/admin/database">
+            <Button variant="outline" size="sm" className="text-xs uppercase tracking-wider gap-1.5 font-semibold">
+              <Database className="w-3.5 h-3.5" />
+              <span>Database Studio</span>
+            </Button>
+          </Link>
+
           <Link href="/exam/admin/examinations/create">
             <Button size="sm" className="text-xs uppercase tracking-wider gap-1.5 font-semibold">
               <PlusCircle className="w-3.5 h-3.5" />
